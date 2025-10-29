@@ -5,7 +5,8 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PORT=5000 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
-    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0 \
+    NODE_OPTIONS=--dns-result-order=ipv4first
 
 # ---- Install system deps for Chromium -----------------------------------
 RUN apt-get update && \
@@ -53,18 +54,17 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ---- FORCE IPv4 + Download Chromium -------------------------------------
-# This forces curl (used by Playwright) to use IPv4 only
-RUN echo 'curl_ipresolve = 4' >> /etc/wgetrc && \
-    echo 'ip_resolve = 4' >> /etc/wgetrc
+# ---- Force IPv4 ---------------------------------------------------------
+# Ensures system prefers IPv4 over IPv6 for all networking (glibc level)
+RUN echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
 
-# Use --with-deps to install system deps + browser in one go
-RUN playwright install --with-deps chromium
+# ---- Install Chromium via Playwright ------------------------------------
+RUN playwright install chromium
 
 # ---- Copy app -----------------------------------------------------------
 COPY app.py .
 
-# ---- Expose ------------------------------------------------------------
+# ---- Expose -------------------------------------------------------------
 EXPOSE 5000
 
 # ---- Start with Gunicorn ------------------------------------------------
