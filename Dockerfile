@@ -43,10 +43,9 @@ RUN apt-get update && \
         xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# ---- Disable IPv6 to fix ENETUNREACH -----------------------------------
+# ---- Write IPv6 disable config (applied at runtime) ---------------------
 RUN echo 'net.ipv6.conf.all.disable_ipv6 = 1' >> /etc/sysctl.conf && \
-    echo 'net.ipv6.conf.default.disable_ipv6 = 1' >> /etc/sysctl.conf && \
-    sysctl -p
+    echo 'net.ipv6.conf.default.disable_ipv6 = 1' >> /etc/sysctl.conf
 
 # ---- Working directory --------------------------------------------------
 WORKDIR /app
@@ -55,7 +54,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ---- Download Chromium (IPv4 only now) ----------------------------------
+# ---- Download Chromium (IPv4 forced via config) -------------------------
 RUN playwright install chromium
 
 # ---- Copy app -----------------------------------------------------------
@@ -64,8 +63,9 @@ COPY app.py .
 # ---- Expose ------------------------------------------------------------
 EXPOSE 5000
 
-# ---- Start with Gunicorn ------------------------------------------------
-CMD exec gunicorn --bind 0.0.0.0:$PORT \
+# ---- Start with Gunicorn + apply sysctl ---------------------------------
+CMD sysctl -p && \
+    exec gunicorn --bind 0.0.0.0:$PORT \
                --workers 2 \
                --threads 2 \
                --worker-class sync \
