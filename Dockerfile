@@ -54,8 +54,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ---- Force IPv4 ---------------------------------------------------------
-# Ensures system prefers IPv4 over IPv6 for all networking (glibc level)
+# ---- Force IPv4 (Render fix) --------------------------------------------
 RUN echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
 
 # ---- Install Chromium via Playwright ------------------------------------
