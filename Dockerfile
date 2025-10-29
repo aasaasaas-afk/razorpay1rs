@@ -1,5 +1,5 @@
-# Use official Playwright image that already includes Chromium
-FROM mcr.microsoft.com/playwright/python:v1.47.2-jammy
+# Use official Playwright base image with Chromium preinstalled
+FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
 
 # ---- Environment --------------------------------------------------------
 ENV PYTHONUNBUFFERED=1 \
