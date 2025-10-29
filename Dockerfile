@@ -3,9 +3,11 @@ FROM python:3.9-slim
 # ---- Environment --------------------------------------------------------
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PORT=5000
+    PORT=5000 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0
 
-# ---- Install Chromium system dependencies -------------------------------
+# ---- Install system deps for Chromium -----------------------------------
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -41,11 +43,8 @@ RUN apt-get update && \
         libxtst6 \
         wget \
         xdg-utils \
+        curl \
     && rm -rf /var/lib/apt/lists/*
-
-# ---- Write IPv6 disable config (applied at runtime) ---------------------
-RUN echo 'net.ipv6.conf.all.disable_ipv6 = 1' >> /etc/sysctl.conf && \
-    echo 'net.ipv6.conf.default.disable_ipv6 = 1' >> /etc/sysctl.conf
 
 # ---- Working directory --------------------------------------------------
 WORKDIR /app
@@ -54,8 +53,13 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ---- Download Chromium (IPv4 forced via config) -------------------------
-RUN playwright install chromium
+# ---- FORCE IPv4 + Download Chromium -------------------------------------
+# This forces curl (used by Playwright) to use IPv4 only
+RUN echo 'curl_ipresolve = 4' >> /etc/wgetrc && \
+    echo 'ip_resolve = 4' >> /etc/wgetrc
+
+# Use --with-deps to install system deps + browser in one go
+RUN playwright install --with-deps chromium
 
 # ---- Copy app -----------------------------------------------------------
 COPY app.py .
@@ -63,9 +67,8 @@ COPY app.py .
 # ---- Expose ------------------------------------------------------------
 EXPOSE 5000
 
-# ---- Start with Gunicorn + apply sysctl ---------------------------------
-CMD sysctl -p && \
-    exec gunicorn --bind 0.0.0.0:$PORT \
+# ---- Start with Gunicorn ------------------------------------------------
+CMD exec gunicorn --bind 0.0.0.0:$PORT \
                --workers 2 \
                --threads 2 \
                --worker-class sync \
