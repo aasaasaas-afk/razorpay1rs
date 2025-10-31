@@ -241,7 +241,9 @@ def create_order(session, payment_link_id, amount_paise, payment_page_item_id):
         resp = session.post(url, headers=headers, json=payload, timeout=15)
         resp.raise_for_status()
         return resp.json().get("order", {}).get("id")
-    except: return None
+    except Exception as e:
+        logging.error(f"Order creation failed: {str(e)}")
+        return None
 
 def submit_payment(session, order_id, card_info, user_info, amount_paise, key_id, keyless_header, payment_link_id, session_token, site_url):
     card_number, exp_month, exp_year, cvv = card_info
