@@ -188,6 +188,12 @@ def extract_merchant_data_direct(site_url):
                         'keyless_header': 'api_v1:vNQKl/R1ASkk7vT9MvJY3tYVjeV3jfltskhOwoZUfQad2n91vwexGYzlLxMw0vBL5GLS0xDghw9xZogu31Tg3VQ1UesS9Q==',
                         'payment_link_id': 'pl_OzLkvRvf1drPps',
                         'payment_page_item_id': 'ppi_OzLkvSvf1drPpt'
+                    },
+                    'merchant': {
+                        'key_id': 'rzp_test_1234567890ABC',  # Replace with actual test key
+                        'keyless_header': 'api_v1:test_header_value',  # Replace with actual header
+                        'payment_link_id': 'pl_test1234567890',  # Replace with actual payment link ID
+                        'payment_page_item_id': 'ppi_test1234567890'  # Replace with actual item ID
                     }
                 }
                 
