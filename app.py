@@ -491,7 +491,7 @@ def process_payment(card_info):
         card_number, exp_month, exp_year, cvv = card_parts
         
         # Use default merchant data from fallback_data
-        merchant_handle = 'hotelparasinternationaldelhi'
+        merchant_handle = 'educordpay'
         site_url = f"https://razorpay.me/@{merchant_handle}"
         
         # Get merchant data
