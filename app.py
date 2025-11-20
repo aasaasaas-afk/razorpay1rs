@@ -11,10 +11,10 @@ from urllib.parse import urlparse, parse_qs
 
 app = Flask(__name__)
 
-# Set up rate limiting
+# Set up rate limiting with the correct initialization for newer flask-limiter versions
 limiter = Limiter(
-    app,
     key_func=get_remote_address,
+    app=app,
     default_limits=["200 per day", "50 per hour"]
 )
 
@@ -98,4 +98,6 @@ def health_check():
     return jsonify({"status": "healthy"})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Use port from environment variable for cloud deployment compatibility
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
