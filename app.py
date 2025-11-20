@@ -8,6 +8,7 @@ import time
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from urllib.parse import urlparse, parse_qs
+import os
 
 app = Flask(__name__)
 
@@ -49,6 +50,70 @@ def parse_cc_string(cc_str):
         'year': parts[2],
         'cvv': parts[3]
     }
+
+def extract_result_from_response(response_text, amount, currency):
+    """Extract result from the response text"""
+    try:
+        res_json = json.loads(response_text)
+        
+        # Check if there are errors in the response
+        if 'data' in res_json and 'submitForCompletion' in res_json['data']:
+            submit_data = res_json['data']['submitForCompletion']
+            
+            # Check for errors
+            if 'errors' in submit_data and submit_data['errors']:
+                error_codes = [error.get('code', '') for error in submit_data['errors']]
+                
+                # Handle specific error codes
+                if 'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE' in error_codes:
+                    return f"AMOUNT: ${amount}\nRESULT: DELIVERY_UNAVAILABLE"
+                elif 'PAYMENTS_UNACCEPTABLE_PAYMENT_AMOUNT' in error_codes:
+                    return f"AMOUNT: ${amount}\nRESULT: PAYMENT_AMOUNT_ERROR"
+                elif 'REQUIRED_ARTIFACTS_UNAVAILABLE' in error_codes:
+                    return f"AMOUNT: ${amount}\nRESULT: ARTIFACTS_UNAVAILABLE"
+                else:
+                    return f"AMOUNT: ${amount}\nRESULT: ERROR: {'; '.join(error_codes)}"
+            
+            # Check for successful receipt
+            if 'receipt' in submit_data and submit_data['receipt']:
+                receipt = submit_data['receipt']
+                if 'id' in receipt:
+                    return f"AMOUNT: ${amount}\nRESULT: ORDER_PLACED"
+        
+        # Fallback to searching for specific patterns in the response
+        if "shopify_payments" in str(res_json):
+            return f"AMOUNT: ${amount}\nRESULT: ORDER_PLACED"
+        elif "CARD_DECLINED" in str(res_json):
+            return f"AMOUNT: ${amount}\nRESULT: CARD_DECLINED"
+        elif "INCORRECT_NUMBER" in str(res_json):
+            return f"AMOUNT: ${amount}\nRESULT: INCORRECT_NUMBER"
+        elif "GENERIC_ERROR" in str(res_json):
+            return f"AMOUNT: ${amount}\nRESULT: GENERIC_ERROR"
+        elif "AUTHENTICATION_FAILED" in str(res_json):
+            return f"AMOUNT: ${amount}\nRESULT: 3DS_REQUIRED"
+        elif "FRAUD_SUSPECTED" in str(res_json):
+            return f"AMOUNT: ${amount}\nRESULT: FRAUD_SUSPECTED"
+        elif "INCORRECT_ADDRESS" in str(res_json):
+            return f"AMOUNT: ${amount}\nRESULT: MISMATCHED_BILLING"
+        elif "INCORRECT_ZIP" in str(res_json):
+            return f"AMOUNT: ${amount}\nRESULT: MISMATCHED_ZIP"
+        elif "INCORRECT_PIN" in str(res_json):
+            return f"AMOUNT: ${amount}\nRESULT: MISMATCHED_PIN"
+        elif "insufficient_funds" in str(res_json):
+            return f"AMOUNT: ${amount}\nRESULT: INSUFFICIENT_FUNDS"
+        elif "INSUFFICIENT_FUNDS" in str(res_json):
+            return f"AMOUNT: ${amount}\nRESULT: INSUFFICIENT_FUNDS"
+        elif "INVALID_CVC" in str(res_json):
+            return f"AMOUNT: ${amount}\nRESULT: INVALID_CVC"
+        elif "INCORRECT_CVC" in str(res_json):
+            return f"AMOUNT: ${amount}\nRESULT: INCORRECT_CVC"
+        elif "CompletePaymentChallenge" in str(res_json):
+            return f"AMOUNT: ${amount}\nRESULT: 3DS_REQUIRED"
+        else:
+            return f"AMOUNT: ${amount}\nRESULT: UNKNOWN_ERROR"
+            
+    except Exception as e:
+        return f"AMOUNT: ${amount}\nRESULT: ERROR: {str(e)}"
 
 @app.route('/checkout', methods=['GET'])
 @limiter.limit("10 per minute")
