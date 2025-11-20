@@ -52,7 +52,7 @@ def parse_cc_string(cc_str):
     }
 
 def extract_result_from_response(response_text, amount, currency):
-    """Extract result from the response text"""
+    """Extract result from response text"""
     try:
         res_json = json.loads(response_text)
         
@@ -80,7 +80,7 @@ def extract_result_from_response(response_text, amount, currency):
                 if 'id' in receipt:
                     return f"AMOUNT: ${amount}\nRESULT: ORDER_PLACED"
         
-        # Fallback to searching for specific patterns in the response
+        # Fallback to searching for specific patterns in response
         if "shopify_payments" in str(res_json):
             return f"AMOUNT: ${amount}\nRESULT: ORDER_PLACED"
         elif "CARD_DECLINED" in str(res_json):
