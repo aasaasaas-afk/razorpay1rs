@@ -8,11 +8,20 @@ import json as json_module
 import time
 from urllib.parse import urlparse
 import urllib3
+import threading
+import queue
+from datetime import datetime
 
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
+
+# Request queue system
+request_queue = queue.Queue()
+processing_thread = None
+last_process_time = 0
+PROCESSING_INTERVAL = 20  # 20 seconds between requests
 
 # List of proxies to rotate - properly formatted
 proxies_list = [
@@ -282,6 +291,55 @@ def process_payment(cc, mm, yy, cvv):
             'response': f'All proxies failed or an unexpected error occurred. Last error: {str(e)}'
         }
 
+def queue_worker():
+    """Background thread that processes requests from the queue"""
+    global last_process_time
+    
+    while True:
+        try:
+            # Get request from queue (blocks until a request is available)
+            request_data = request_queue.get()
+            
+            # Calculate how long to wait before processing this request
+            current_time = time.time()
+            time_since_last = current_time - last_process_time
+            
+            if time_since_last < PROCESSING_INTERVAL:
+                wait_time = PROCESSING_INTERVAL - time_since_last
+                print(f"Waiting {wait_time:.1f} seconds before processing next request...")
+                time.sleep(wait_time)
+            
+            # Process the payment
+            print(f"Processing card: {request_data['cc'][-4:]}")
+            result = process_payment(
+                request_data['cc'], 
+                request_data['mm'], 
+                request_data['yy'], 
+                request_data['cvv']
+            )
+            
+            # Store the result
+            request_data['result'] = result
+            request_data['processed'] = True
+            
+            # Update the last process time
+            last_process_time = time.time()
+            
+            # Mark task as done
+            request_queue.task_done()
+            
+        except Exception as e:
+            print(f"Error in queue worker: {e}")
+            request_queue.task_done()
+
+# Start the background queue worker thread
+def start_queue_worker():
+    global processing_thread
+    if processing_thread is None or not processing_thread.is_alive():
+        processing_thread = threading.Thread(target=queue_worker, daemon=True)
+        processing_thread.start()
+        print("Queue worker started")
+
 @app.route('/gate=b3/cc=<cc_data>')
 def gate_b3(cc_data):
     # Parse the credit card data
@@ -296,14 +354,46 @@ def gate_b3(cc_data):
     
     cc, mm, yy, cvv = match.groups()
     
-    # Process the payment
-    result = process_payment(cc, mm, yy, cvv)
+    # Start the queue worker if not already running
+    start_queue_worker()
     
-    # Add 20-second delay after processing
-    print("Processing complete. Waiting 20 seconds before responding...")
-    time.sleep(20)
+    # Create a request data dictionary
+    request_data = {
+        'cc': cc,
+        'mm': mm,
+        'yy': yy,
+        'cvv': cvv,
+        'result': None,
+        'processed': False,
+        'timestamp': time.time()
+    }
     
-    return jsonify(result)
+    # Add the request to the queue
+    request_queue.put(request_data)
+    
+    # Poll for the result (with a timeout to prevent hanging)
+    timeout = 120  # Maximum wait time of 2 minutes
+    start_time = time.time()
+    
+    while time.time() - start_time < timeout:
+        if request_data.get('processed', False):
+            return jsonify(request_data['result'])
+        time.sleep(0.5)  # Check every half second
+    
+    # If we get here, the request timed out
+    return jsonify({
+        'status': 'Error',
+        'response': 'Request processing timed out'
+    })
+
+@app.route('/status')
+def status():
+    """Endpoint to check queue status"""
+    return jsonify({
+        'queue_size': request_queue.qsize(),
+        'worker_alive': processing_thread.is_alive() if processing_thread else False,
+        'last_process_time': datetime.fromtimestamp(last_process_time).strftime('%Y-%m-%d %H:%M:%S') if last_process_time > 0 else 'Never'
+    })
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
