@@ -284,6 +284,10 @@ def process_payment(cc, mm, yy, cvv):
 
 @app.route('/gate=b3/cc=<cc_data>')
 def gate_b3(cc_data):
+    # Add 20-second delay between requests
+    print("Waiting 20 seconds before processing request...")
+    time.sleep(20)
+    
     # Parse the credit card data
     pattern = r'^(\d{13,19})\|([0-1]\d)\|(\d{2}|\d{4})\|(\d{3,4})$'
     match = re.match(pattern, cc_data)
