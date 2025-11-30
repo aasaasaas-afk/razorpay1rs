@@ -7,6 +7,10 @@ from bs4 import BeautifulSoup
 import json as json_module
 import time
 from urllib.parse import urlparse
+import urllib3
+
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
@@ -57,7 +61,11 @@ CCN_patterns = [
     "Your card's security code is incorrect"
 ]
 
-def requests_with_retry(method, url, max_retries=3, **kwargs):
+# Create a session for connection pooling
+session = requests.Session()
+session.verify = False  # Disable SSL verification for the session
+
+def requests_with_retry(method, url, max_retries=2, **kwargs):
     """Makes a request with proxy rotation and retries."""
     last_error = None
     # Shuffle proxies to try a different one first each time
@@ -77,12 +85,11 @@ def requests_with_retry(method, url, max_retries=3, **kwargs):
             else:
                 actual_proxy = proxy
                 
-            response = requests.request(
+            response = session.request(
                 method, 
                 url, 
                 proxies=actual_proxy, 
-                timeout=15,
-                verify=False,  # Disable SSL verification for problematic proxies
+                timeout=8,  # Reduced timeout for faster processing
                 **kwargs
             )
             response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
@@ -95,18 +102,17 @@ def requests_with_retry(method, url, max_retries=3, **kwargs):
                 requests.exceptions.SSLError) as e:
             last_error = e
             print(f"Attempt {attempt + 1} failed with proxy {proxy}: {e}. Retrying...")
-            # Add a small delay before retrying
-            time.sleep(1)
+            # Reduced delay between retries
+            time.sleep(0.5)
             continue
             
     # If all retries fail, try without proxy as a last resort
     try:
         print("All proxies failed, trying without proxy...")
-        response = requests.request(
+        response = session.request(
             method, 
             url, 
-            timeout=15,
-            verify=False,
+            timeout=8,  # Reduced timeout
             **kwargs
         )
         response.raise_for_status()
