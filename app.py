@@ -5,15 +5,17 @@ import uuid
 from flask import Flask, jsonify
 from bs4 import BeautifulSoup
 import json as json_module
+import time
+from urllib.parse import urlparse
 
 app = Flask(__name__)
 
-# List of proxies to rotate
+# List of proxies to rotate - properly formatted
 proxies_list = [
     {'http': 'http://g2rTXpNfPdcw2fzGtWKp62yH:nizar1elad2@sg-sin.pvdata.host:8080', 
      'https': 'http://g2rTXpNfPdcw2fzGtWKp62yH:nizar1elad2@sg-sin.pvdata.host:8080'},
-    {'http': 'https://brad:bradhqcc@tits.oops.wtf:6969', 
-     'https': 'https://brad:bradhqcc@tits.oops.wtf:6969'},
+    {'http': 'http://brad:bradhqcc@tits.oops.wtf:6969', 
+     'https': 'http://brad:bradhqcc@tits.oops.wtf:6969'},
     {'http': 'http://sssssss:sssssssssssssssssssssss@tits.oops.wtf:6969', 
      'https': 'http://sssssss:sssssssssssssssssssssss@tits.oops.wtf:6969'}
 ]
@@ -64,20 +66,55 @@ def requests_with_retry(method, url, max_retries=3, **kwargs):
     for attempt in range(max_retries):
         proxy = shuffled_proxies[attempt % len(shuffled_proxies)]
         try:
-            response = requests.request(method, url, proxies=proxy, timeout=15, **kwargs)
+            # Make sure we're using the right proxy protocol for the URL
+            parsed_url = urlparse(url)
+            if parsed_url.scheme == 'https':
+                # For HTTPS URLs, use the HTTPS proxy if available, otherwise fall back to HTTP proxy
+                if 'https' in proxy and proxy['https']:
+                    actual_proxy = proxy
+                else:
+                    actual_proxy = {'http': proxy.get('http', ''), 'https': proxy.get('http', '')}
+            else:
+                actual_proxy = proxy
+                
+            response = requests.request(
+                method, 
+                url, 
+                proxies=actual_proxy, 
+                timeout=15,
+                verify=False,  # Disable SSL verification for problematic proxies
+                **kwargs
+            )
             response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
             return response
         except (requests.exceptions.ProxyError, 
                 requests.exceptions.ConnectTimeout, 
                 requests.exceptions.ConnectionError,
                 requests.exceptions.ReadTimeout,
-                requests.exceptions.HTTPError) as e:
+                requests.exceptions.HTTPError,
+                requests.exceptions.SSLError) as e:
             last_error = e
             print(f"Attempt {attempt + 1} failed with proxy {proxy}: {e}. Retrying...")
+            # Add a small delay before retrying
+            time.sleep(1)
             continue
             
-    # If all retries fail, raise the last error
-    raise last_error
+    # If all retries fail, try without proxy as a last resort
+    try:
+        print("All proxies failed, trying without proxy...")
+        response = requests.request(
+            method, 
+            url, 
+            timeout=15,
+            verify=False,
+            **kwargs
+        )
+        response.raise_for_status()
+        return response
+    except Exception as e:
+        print(f"Request without proxy also failed: {e}")
+        # If all attempts fail, raise the last error
+        raise last_error
 
 def process_payment(cc, mm, yy, cvv):
     try:
