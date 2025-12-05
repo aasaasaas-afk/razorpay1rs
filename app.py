@@ -227,6 +227,10 @@ def process_payment(cc, mm, yy, cvv):
         status = "Declined"
         response_text = message if message else (rr[0] if rr else "Unknown error")
 
+        # FIX: Ensure response_text is a string to prevent the 'NoneType' error
+        if response_text is None:
+            response_text = "Unknown error (response was None)"
+
         for pattern in approved_patterns:
             if pattern in response_text:
                 status = "Approved"
