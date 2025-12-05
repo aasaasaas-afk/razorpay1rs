@@ -142,13 +142,24 @@ def process_payment(cc, mm, yy, cvv):
         r = requests_with_retry('POST', 'https://payments.braintree-api.com/graphql', headers=headers, json=json_data)
         t = r.json()
         
-        if 'data' not in t or 'tokenizeCreditCard' not in t['data'] or 'token' not in t['data']['tokenizeCreditCard']:
+        # --- FIX ---
+        # Safely check for the token in the Braintree response to prevent 'NoneType' errors
+        # This handles cases where the API response might be {"data": null} or missing keys.
+        data = t.get('data')
+        tokenize_data = data.get('tokenizeCreditCard') if isinstance(data, dict) else None
+        
+        if not data or not isinstance(data, dict) or not tokenize_data or not isinstance(tokenize_data, dict) or 'token' not in tokenize_data:
+            error_message = 'Failed to tokenize card: Invalid response structure from Braintree.'
+            # Try to get a more specific error message if it exists
+            if 'errors' in t and t['errors'] and isinstance(t['errors'], list) and 'message' in t['errors'][0]:
+                error_message = 'Failed to tokenize card: ' + t['errors'][0]['message']
             return {
                 'status': 'Error',
-                'response': 'Failed to tokenize card: ' + t.get('errors', [{}])[0].get('message', 'Unknown error')
+                'response': error_message
             }
+        # --- END FIX ---
             
-        tok = t['data']['tokenizeCreditCard']['token']
+        tok = tokenize_data['token']
 
         # Step 2: Submit token to WooCommerce
         cookies = {
@@ -227,7 +238,7 @@ def process_payment(cc, mm, yy, cvv):
         status = "Declined"
         response_text = message if message else (rr[0] if rr else "Unknown error")
 
-        # FIX: Ensure response_text is a string to prevent the 'NoneType' error
+        # Ensure response_text is a string to prevent the 'NoneType' error
         if response_text is None:
             response_text = "Unknown error (response was None)"
 
