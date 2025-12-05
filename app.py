@@ -97,6 +97,10 @@ def process_payment(cc, mm, yy, cvv):
         headers = {
             'accept': '*/*',
             'accept-language': 'en-GB',
+            # =================================================================
+            # IMPORTANT: You MUST replace the token below with a new, valid one
+            # from your Braintree Control Panel.
+            # =================================================================
             'authorization': 'Bearer eyJraWQiOiIyMDE4MDQyNjE2LXByb2R1Y3Rpb24iLCJpc3MiOiJodHRwczovL2FwaS5icmFpbnRyZWVnYXRld2F5LmNvbSIsImFsZyI6IkVTMjU2In0.eyJleHAiOjE3NjQ1NTczMDIsImp0aSI6IjU2MDg3NjQwLTZlMjAtNDNkOC1iMzczLTI5YTYxNDk2ZTVjZSIsInN1YiI6InJqeHpqdG40OWptYzJtbTMiLCJpc3MiOiJodHRwczovL2FwaS5icmFpbnRyZWVnYXRld2F5LmNvbSIsIm1lcmNoYW50Ijp7InB1YmxpY19pZCI6InJqeHpqdG40OWptYzJtbTMiLCJ2ZXJpZnlfY2FyZF9ieV9kZWZhdWx0Ijp0cnVlLCJ2ZXJpZnlfd2FsbGV0X2J5X2RlZmF1bHQiOmZhbHNlfSwicmlnaHRzIjpbIm1hbmFnZV92YXVsdCJdLCJzY29wZSI6WyJCcmFpbnRyZWU6VmF1bHQiLCJCcmFpbnRyZWU6Q2xpZW50U0RLIiwiQnJhaW50cmVlOkFYTyJdLCJvcHRpb25zIjp7Im1lcmNoYW50X2FjY291bnRfaWQiOiJsb3ZlZGFnYWlubWVkaWFfaW5zdGFudCIsInBheXBhbF9jbGllbnRfaWQiOiJBZHdOalplLUtkeGZNcEFTc3NhaUNIdV82bWQ2S2lYcXdpQk9tUENmeDJKYm9jYl9IQkI4YVBFTjFrV2tydkpOXzZ2dmJqcFlhQ0w4OWdVMSJ9fQ.PmLOpgapJgaJCikf76abXKw27QRmthrwdZb34iO2AimzNdvgsbc3IJaeqgyrmQBFnq5HbEsPGQx5COsgotI55w',
             'braintree-version': '2018-05-10',
             'content-type': 'application/json',
@@ -142,9 +146,7 @@ def process_payment(cc, mm, yy, cvv):
         r = requests_with_retry('POST', 'https://payments.braintree-api.com/graphql', headers=headers, json=json_data)
         t = r.json()
         
-        # --- FIX ---
         # Safely check for the token in the Braintree response to prevent 'NoneType' errors
-        # This handles cases where the API response might be {"data": null} or missing keys.
         data = t.get('data')
         tokenize_data = data.get('tokenizeCreditCard') if isinstance(data, dict) else None
         
@@ -157,7 +159,6 @@ def process_payment(cc, mm, yy, cvv):
                 'status': 'Error',
                 'response': error_message
             }
-        # --- END FIX ---
             
         tok = tokenize_data['token']
 
