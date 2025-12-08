@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 import requests
 import time
 
@@ -6,7 +6,7 @@ app = Flask(__name__)
 
 # Configuration
 BRAINTREE_API_URL = 'https://www.md-tech-gen.tech/api/braintree/b3auth2.php'
-TIMEOUT = 160  # 60 seconds timeout
+TIMEOUT = 60  # 60 seconds timeout
 
 # Cookies and headers as provided
 cookies = {
@@ -57,7 +57,6 @@ def process_payment(card_details):
         }
         
         # Make the request with timeout
-        start_time = time.time()
         response = requests.get(
             BRAINTREE_API_URL,
             params=params,
@@ -66,30 +65,22 @@ def process_payment(card_details):
             timeout=TIMEOUT
         )
         
-        # Check if request was successful
-        if response.status_code != 200:
-            if response.status_code == 502:
-                return jsonify({
-                    "error": "External payment gateway is temporarily unavailable (502 Bad Gateway)",
-                    "details": "The payment processing service is currently down. Please try again later."
-                }), 502
-            else:
-                return jsonify({
-                    "error": f"API request failed with status code {response.status_code}",
-                    "details": response.text
-                }), response.status_code
+        # If the API returns a successful response (200), filter to show only status and response
+        if response.status_code == 200:
+            data = response.json()
+            result = {
+                "status": data.get("status", ""),
+                "response": data.get("response", "")
+            }
+            return jsonify(result)
+        else:
+            # For any other status code (including 502), return the raw response
+            return Response(
+                response.content,
+                status=response.status_code,
+                headers=dict(response.headers)
+            )
             
-        # Parse the JSON response
-        data = response.json()
-        
-        # Extract only the required fields
-        result = {
-            "status": data.get("status", ""),
-            "response": data.get("response", "")
-        }
-        
-        return jsonify(result)
-        
     except requests.exceptions.Timeout:
         return jsonify({
             "error": "Request timed out after 60 seconds",
