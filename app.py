@@ -6,7 +6,7 @@ app = Flask(__name__)
 
 # Configuration
 BRAINTREE_API_URL = 'https://www.md-tech-gen.tech/api/braintree/b3auth2.php'
-TIMEOUT = 60  # 60 seconds timeout
+TIMEOUT = 160  # 60 seconds timeout
 
 # Cookies and headers as provided
 cookies = {
