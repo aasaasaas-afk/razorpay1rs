@@ -99,7 +99,9 @@ class RazorpayChecker:
     
     async def __aenter__(self):
         connector = aiohttp.TCPConnector(ssl=False)
+        
         if self.proxy:
+            # Create proxy URL with proper scheme
             proxy_url = f"http://{self.proxy['username']}:{self.proxy['password']}@{self.proxy['ip']}:{self.proxy['port']}"
             self.session = aiohttp.ClientSession(
                 connector=connector,
@@ -125,7 +127,7 @@ class RazorpayChecker:
             # Parse card data
             num, mm, yy, cvc = cc_data.split("|")
             
-            # Build Razorpay test URL
+            # Build Razorpay test URL with proper encoding
             params = {
                 'cc': cc_data,
                 'url': 'https://razorpay.me/@ukinternational',
@@ -137,17 +139,27 @@ class RazorpayChecker:
             
             async with self.session.get(test_url, headers=headers, allow_redirects=True) as response:
                 if response.status == 200:
-                    result = await response.json()
-                    
-                    # Extract the relevant fields
-                    message = result.get('message', 'Unknown error')
-                    status = result.get('status', 'unknown')
-                    
-                    return {
-                        'success': True,
-                        'code': status,
-                        'message': message
-                    }
+                    # Try to get JSON response
+                    try:
+                        result = await response.json()
+                        
+                        # Extract the relevant fields
+                        message = result.get('message', 'Unknown error')
+                        status = result.get('status', 'unknown')
+                        
+                        return {
+                            'success': True,
+                            'code': status,
+                            'message': message
+                        }
+                    except:
+                        # Fallback to text response
+                        result_text = await response.text()
+                        return {
+                            'success': True,
+                            'code': 'unknown',
+                            'message': result_text[:200]  # Limit response size
+                        }
                 else:
                     return {
                         'success': False,
@@ -201,7 +213,7 @@ def home():
     """API Documentation"""
     return """
     <html>
-    <head><title>Razorpay 1 INR Card Testing API by kคli liຖนxx</title></head>
+    <head><title>Razorpay Card Testing API</title></head>
     <body style="font-family: Arial; padding: 40px; background: #1a1a2e; color: #eee;">
         <div style="max-width: 800px; margin: 0 auto; background: #16213e; padding: 30px; border-radius: 10px;">
             <h1 style="color: #f39c12;">🚀 Razorpay Card Testing API</h1>
@@ -288,8 +300,8 @@ def not_found(error):
 
 if __name__ == "__main__":
     print("""
-╔════════════════════╗
-║   RAZORPAY 1 INR CARD TESTING API BY - kคli liຖนxx                        ║
+╔════════════════════════════════════════════════════════════╗
+║   RAZORPAY CARD TESTING API                           ║
 ╚════════════════════════════════════════════════════════════╝
 
 🚀 Server: http://localhost:8000/
