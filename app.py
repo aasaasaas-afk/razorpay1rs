@@ -106,18 +106,12 @@ class RazorpayChecker:
                 proxy_url = f"http://{self.proxy['username']}:{self.proxy['password']}@{self.proxy['ip']}:{self.proxy['port']}"
                 logger.info(f"Using proxy: {proxy_url}")
                 
-                # Use ProxyConnector for better control
-                proxy_connector = aiohttp.ProxyConnector(
-                    proxy=proxy_url,
-                    ssl=False,
-                    limit=10,
-                    limit_per_host=5
-                )
-                
+                # Use proxy parameter in ClientSession for compatibility
                 self.session = aiohttp.ClientSession(
-                    connector=proxy_connector,
+                    connector=connector,
                     timeout=aiohttp.ClientTimeout(total=30),
-                    cookie_jar=aiohttp.CookieJar()
+                    cookie_jar=aiohttp.CookieJar(),
+                    proxy=proxy_url  # This is the correct way for most aiohttp versions
                 )
             except Exception as e:
                 logger.error(f"Proxy connection error: {str(e)}")
