@@ -46,7 +46,7 @@ def gate(card):
         # CASE 1: Normal gate response → return only status + message
         if "status" in data and "message" in data:
             return jsonify({
-                "status": data["status"],
+                "code": data["status"],
                 "message": data["message"]
             })
 
@@ -54,8 +54,8 @@ def gate(card):
         if "FullResponse" in data and "error" in data["FullResponse"]:
             err = data["FullResponse"]["error"]
             return jsonify({
-                "reason": err.get("reason"),
-                "description": err.get("description")
+                "code": err.get("reason"),
+                "message": err.get("description")
             })
 
         # Any other case → just return whatever is there (raw)
