@@ -78,8 +78,8 @@ def parse_proxy(proxy_str):
                     'ip': ip,
                     'port': port
                 }
-    except:
-        pass
+    except Exception as e:
+        logger.warning(f"Proxy parsing error: {str(e)}")
     return None
 
 # ============================================================
@@ -101,14 +101,27 @@ class RazorpayChecker:
         connector = aiohttp.TCPConnector(ssl=False)
         
         if self.proxy:
-            # Create proxy URL with proper scheme
-            proxy_url = f"http://{self.proxy['username']}:{self.proxy['password']}@{self.proxy['ip']}:{self.proxy['port']}"
-            self.session = aiohttp.ClientSession(
-                connector=connector,
-                timeout=aiohttp.ClientTimeout(total=30),
-                cookie_jar=aiohttp.CookieJar(),
-                proxy=proxy_url
-            )
+            try:
+                # Create proxy URL with proper scheme
+                proxy_url = f"http://{self.proxy['username']}:{self.proxy['password']}@{self.proxy['ip']}:{self.proxy['port']}"
+                logger.info(f"Using proxy: {proxy_url}")
+                
+                # Use ProxyConnector for better control
+                proxy_connector = aiohttp.ProxyConnector(
+                    proxy=proxy_url,
+                    ssl=False,
+                    limit=10,
+                    limit_per_host=5
+                )
+                
+                self.session = aiohttp.ClientSession(
+                    connector=proxy_connector,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                    cookie_jar=aiohttp.CookieJar()
+                )
+            except Exception as e:
+                logger.error(f"Proxy connection error: {str(e)}")
+                raise
         else:
             self.session = aiohttp.ClientSession(
                 connector=connector,
@@ -137,11 +150,16 @@ class RazorpayChecker:
             
             headers = self.base_headers.copy()
             
+            logger.info(f"Testing card: {cc_data[:4]}**** against {test_url}")
+            
             async with self.session.get(test_url, headers=headers, allow_redirects=True) as response:
+                logger.info(f"Response status: {response.status}")
+                
                 if response.status == 200:
                     # Try to get JSON response
                     try:
                         result = await response.json()
+                        logger.info(f"JSON response received: {str(result)[:100]}")
                         
                         # Extract the relevant fields
                         message = result.get('message', 'Unknown error')
@@ -152,24 +170,30 @@ class RazorpayChecker:
                             'code': status,
                             'message': message
                         }
-                    except:
+                    except Exception as e:
+                        logger.warning(f"JSON parsing failed: {str(e)}")
                         # Fallback to text response
                         result_text = await response.text()
+                        logger.info(f"Text response: {result_text[:200]}")
                         return {
                             'success': True,
                             'code': 'unknown',
                             'message': result_text[:200]  # Limit response size
                         }
                 else:
+                    error_msg = f"Request failed with status {response.status}"
+                    logger.error(error_msg)
                     return {
                         'success': False,
-                        'error': f"Request failed with status {response.status}"
+                        'error': error_msg
                     }
                     
         except Exception as e:
+            error_msg = f"Test failed: {str(e)}"
+            logger.error(error_msg)
             return {
                 'success': False,
-                'error': str(e)[:100]
+                'error': error_msg
             }
 
 # ============================================================
@@ -236,6 +260,7 @@ def home():
                 <li>✅ Razorpay integration</li>
                 <li>✅ Clean JSON response</li>
                 <li>✅ Error handling</li>
+                <li>✅ Detailed logging</li>
             </ul>
             
             <h2 style="color: #3498db;">Response Format:</h2>
@@ -313,6 +338,7 @@ if __name__ == "__main__":
 ✅ Proxy support for anonymity
 ✅ Clean JSON responses
 ✅ Error handling
+✅ Detailed logging
 
 ENDPOINTS:
 ──────────
@@ -337,4 +363,4 @@ RESPONSE:
 }
     """)
     
-    app.run(host='0.0.0.0', port=8000, debug=False, threaded=True)
+    app.run(host='0.0.0.0', port=8000, debug=True, threaded=True)
