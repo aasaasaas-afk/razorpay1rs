@@ -33,7 +33,6 @@ headers = {
 def process_payment(card_details):
     try:
         # Parse card details from the URL parameter
-        # Expected format: card_number|mm|yy or card_number|mm|yyyy|cvv
         parts = card_details.split('|')
         
         if len(parts) < 3:
@@ -69,7 +68,16 @@ def process_payment(card_details):
         
         # Check if request was successful
         if response.status_code != 200:
-            return jsonify({"error": f"API request failed with status code {response.status_code}"}), 500
+            if response.status_code == 502:
+                return jsonify({
+                    "error": "External payment gateway is temporarily unavailable (502 Bad Gateway)",
+                    "details": "The payment processing service is currently down. Please try again later."
+                }), 502
+            else:
+                return jsonify({
+                    "error": f"API request failed with status code {response.status_code}",
+                    "details": response.text
+                }), response.status_code
             
         # Parse the JSON response
         data = response.json()
@@ -83,11 +91,20 @@ def process_payment(card_details):
         return jsonify(result)
         
     except requests.exceptions.Timeout:
-        return jsonify({"error": "Request timed out after 60 seconds"}), 504
+        return jsonify({
+            "error": "Request timed out after 60 seconds",
+            "details": "The payment gateway did not respond in time. Please try again."
+        }), 504
     except requests.exceptions.RequestException as e:
-        return jsonify({"error": f"Request failed: {str(e)}"}), 500
+        return jsonify({
+            "error": "Payment gateway connection failed",
+            "details": str(e)
+        }), 503
     except Exception as e:
-        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
+        return jsonify({
+            "error": "Internal server error",
+            "details": str(e)
+        }), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
